@@ -14,6 +14,13 @@ public abstract class Page : Panel
     protected readonly Label SubtitleLabel;
     protected readonly Panel ScrollContent;
 
+    /// <summary>当前内容区可用宽度（自适应窗口大小，不再硬编码固定宽度）</summary>
+    protected int ContentWidth => Math.Max(Math.Max(ScrollContent.Width, Width - 48) - 4, 400);
+
+    // 防抖定时器：窗口 Resize 停止后重建内容
+    private System.Windows.Forms.Timer? _resizeTimer;
+    private const int ResizeDebounceMs = 200;
+
     protected Page(AppState appState, string title, string subtitle = "")
     {
         AppState = appState;
@@ -54,18 +61,31 @@ public abstract class Page : Panel
         };
         Controls.Add(ScrollContent);
 
-        Resize += (s, e) =>
+        // 初始化防抖定时器（只创建一次，Tick 处理器只注册一次）
+        _resizeTimer = new System.Windows.Forms.Timer { Interval = ResizeDebounceMs };
+        _resizeTimer.Tick += (s, e2) =>
         {
-            ScrollContent.Size = new Size(Width - 48, Height - 100);
+            _resizeTimer!.Stop();
             OnResized();
         };
+
+        Resize += OnPageResize;
+    }
+
+    /// <summary>窗口大小变化处理（防抖重建）</summary>
+    private void OnPageResize(object? sender, EventArgs e)
+    {
+        ScrollContent.Size = new Size(Width - 48, Height - 100);
+        // 重启防抖定时器，停止 Resize 200ms 后重建内容
+        _resizeTimer?.Stop();
+        _resizeTimer?.Start();
     }
 
     /// <summary>页面被导航到时调用</summary>
     public virtual void OnShown() { }
 
-    /// <summary>窗口大小变化时调用</summary>
-    protected virtual void OnResized() { }
+    /// <summary>窗口大小变化停止后调用（防抖），默认重建页面内容</summary>
+    protected virtual void OnResized() => RefreshData();
 
     /// <summary>刷新页面数据</summary>
     public virtual void RefreshData() { }

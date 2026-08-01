@@ -40,7 +40,7 @@ public class UpdatePage : Page
         CreateSectionTitle("更新操作", 0, y);
         y += 30;
 
-        var actionCard = CreateCard(0, y, 720, 60);
+        var actionCard = CreateCard(0, y, ContentWidth, 60);
 
         _checkBtn = new AccentButton
         {
@@ -88,7 +88,7 @@ public class UpdatePage : Page
         CreateSectionTitle("更新进度", 0, y);
         y += 30;
 
-        var progressCard = CreateCard(0, y, 720, 50);
+        var progressCard = CreateCard(0, y, ContentWidth, 50);
         _progressLabel = new Label
         {
             Text = _isUpdating ? "正在检查更新，请稍候..." : "就绪",
@@ -105,7 +105,7 @@ public class UpdatePage : Page
         CreateSectionTitle("更新设置", 0, y);
         y += 30;
 
-        var settingsCard = CreateCard(0, y, 720, 110);
+        var settingsCard = CreateCard(0, y, ContentWidth, 110);
 
         // 自动更新开关
         var autoLabel = new Label
@@ -214,7 +214,7 @@ public class UpdatePage : Page
             var components = new[] { status.AppStatus, status.EngineStatus, status.VirusDbStatus, status.RogueRulesStatus };
 
             // 表头
-            var headerCard = CreateCard(0, y, 720, 28);
+            var headerCard = CreateCard(0, y, ContentWidth, 28);
             var headers = new[] { "组件", "当前版本", "最新版本", "状态", "最后更新" };
             var xPositions = new[] { 8, 120, 260, 400, 540 };
             var widths = new[] { 108, 136, 136, 136, 160 };
@@ -236,7 +236,7 @@ public class UpdatePage : Page
 
             foreach (var comp in components)
             {
-                var compCard = CreateCard(0, y, 720, 28);
+                var compCard = CreateCard(0, y, ContentWidth, 28);
 
                 var values = new[]
                 {
@@ -271,7 +271,7 @@ public class UpdatePage : Page
                 Font = Theme.BodyFont,
                 ForeColor = status.AllUpToDate ? Theme.Success : Theme.Warning,
                 Location = new Point(0, y),
-                Size = new Size(720, 22),
+                Size = new Size(ContentWidth, 22),
                 BackColor = Color.Transparent
             };
             ScrollContent.Controls.Add(summaryLabel);

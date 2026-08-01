@@ -45,7 +45,7 @@ public class SettingsPage : Page
         CreateSectionTitle("界面设置", 0, y);
         y += 30;
 
-        var uiCard = CreateCard(0, y, 720, 110);
+        var uiCard = CreateCard(0, y, ContentWidth, 110);
 
         // UI 模式切换
         var uiModeLabel = new Label
@@ -137,7 +137,7 @@ public class SettingsPage : Page
         CreateSectionTitle("场景模式", 0, y);
         y += 30;
 
-        var sceneCard = CreateCard(0, y, 720, 80);
+        var sceneCard = CreateCard(0, y, ContentWidth, 80);
 
         var sceneDescLabel = new Label
         {
@@ -183,7 +183,7 @@ public class SettingsPage : Page
         CreateSectionTitle("调度设置", 0, y);
         y += 30;
 
-        var schedCard = CreateCard(0, y, 720, 110);
+        var schedCard = CreateCard(0, y, ContentWidth, 110);
 
         // 后台调度开关
         var schedLabel = new Label
@@ -281,7 +281,7 @@ public class SettingsPage : Page
         CreateSectionTitle("配置管理", 0, y);
         y += 30;
 
-        var configCard = CreateCard(0, y, 720, 60);
+        var configCard = CreateCard(0, y, ContentWidth, 60);
 
         _exportBtn = new AccentButton
         {
@@ -325,7 +325,7 @@ public class SettingsPage : Page
         CreateSectionTitle("关于", 0, y);
         y += 30;
 
-        var aboutCard = CreateCard(0, y, 720, 160);
+        var aboutCard = CreateCard(0, y, ContentWidth, 160);
 
         var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
         var versionText = version != null ? $"V{version.Major}.{version.Minor}.{version.Build}" : "V2.0.0";

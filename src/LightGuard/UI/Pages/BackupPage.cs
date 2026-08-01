@@ -47,7 +47,7 @@ public class BackupPage : Page
         CreateSectionTitle("备份操作", 0, y);
         y += 30;
 
-        var actionCard = CreateCard(0, y, 720, 60);
+        var actionCard = CreateCard(0, y, ContentWidth, 60);
 
         _backupBtn = new AccentButton
         {
@@ -78,7 +78,7 @@ public class BackupPage : Page
         CreateSectionTitle("备份进度", 0, y);
         y += 30;
 
-        var progressCard = CreateCard(0, y, 720, 50);
+        var progressCard = CreateCard(0, y, ContentWidth, 50);
         _progressLabel = new Label
         {
             Text = _isBackingUp ? "正在执行备份，请稍候..." : "就绪",
@@ -95,7 +95,7 @@ public class BackupPage : Page
         CreateSectionTitle("备份配置", 0, y);
         y += 30;
 
-        var configCard = CreateCard(0, y, 720, 170);
+        var configCard = CreateCard(0, y, ContentWidth, 170);
 
         // 备份模式
         var modeLabel = new Label
@@ -307,7 +307,7 @@ public class BackupPage : Page
         CreateSectionTitle("保护文件夹", 0, y);
         y += 30;
 
-        var folderCard = CreateCard(0, y, 720, 56);
+        var folderCard = CreateCard(0, y, ContentWidth, 56);
 
         _addFolderBox = new TextBox
         {
@@ -359,7 +359,7 @@ public class BackupPage : Page
         var folders = AppState.Config.Backup.ProtectedFolders;
         foreach (var folder in folders)
         {
-            var itemCard = CreateCard(0, y, 720, 30);
+            var itemCard = CreateCard(0, y, ContentWidth, 30);
 
             var folderLabel = new Label
             {
@@ -418,7 +418,7 @@ public class BackupPage : Page
             else
             {
                 // 表头
-                var headerCard = CreateCard(0, y, 720, 28);
+                var headerCard = CreateCard(0, y, ContentWidth, 28);
                 var headers = new[] { "文件名", "创建时间", "文件数", "大小", "校验" };
                 var xPositions = new[] { 8, 260, 400, 480, 580 };
                 var widths = new[] { 248, 136, 76, 96, 100 };
@@ -440,7 +440,7 @@ public class BackupPage : Page
 
                 foreach (var backup in backups)
                 {
-                    var backupCard = CreateCard(0, y, 720, 24);
+                    var backupCard = CreateCard(0, y, ContentWidth, 24);
 
                     var values = new[]
                     {

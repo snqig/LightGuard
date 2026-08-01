@@ -39,7 +39,7 @@ public class CleanupPage : Page
         CreateSectionTitle("净化状态", 0, y);
         y += 30;
 
-        var statusCard = CreateCard(0, y, 720, 50);
+        var statusCard = CreateCard(0, y, ContentWidth, 50);
         _lastCleanedLabel = new Label
         {
             Text = GetLastCleanedText(),
@@ -56,7 +56,7 @@ public class CleanupPage : Page
         CreateSectionTitle("场景模式", 0, y);
         y += 30;
 
-        var modeCard = CreateCard(0, y, 720, 60);
+        var modeCard = CreateCard(0, y, ContentWidth, 60);
         var modeLabel = new Label
         {
             Text = "选择净化模式：",
@@ -119,7 +119,7 @@ public class CleanupPage : Page
         CreateSectionTitle("快速操作", 0, y);
         y += 30;
 
-        var actionCard = CreateCard(0, y, 720, 60);
+        var actionCard = CreateCard(0, y, ContentWidth, 60);
 
         _cleanBtn = new AccentButton
         {
@@ -183,7 +183,7 @@ public class CleanupPage : Page
                     Font = Theme.HeaderFont,
                     ForeColor = Theme.Accent,
                     Location = new Point(0, y),
-                    Size = new Size(720, 24),
+                    Size = new Size(ContentWidth, 24),
                     BackColor = Color.Transparent
                 };
                 ScrollContent.Controls.Add(groupLabel);
@@ -191,7 +191,7 @@ public class CleanupPage : Page
 
                 foreach (var item in group)
                 {
-                    var itemCard = CreateCard(0, y, 720, 70);
+                    var itemCard = CreateCard(0, y, ContentWidth, 70);
 
                     var nameLabel = new Label
                     {

@@ -57,7 +57,7 @@ public class DashboardPage : Page
         CreateSectionTitle("硬件信息", 0, y);
         y += 30;
 
-        var hwCard = CreateCard(0, y, 720, 130);
+        var hwCard = CreateCard(0, y, ContentWidth, 130);
         var hwLabels = new[]
         {
             $"处理器：{hw.CpuName}",
@@ -119,7 +119,7 @@ public class DashboardPage : Page
             ScrollContent.Controls.Add(card);
 
             cardX += 376;
-            if (cardX >= 720)
+            if (cardX >= ContentWidth)
             {
                 cardX = 0;
                 cardY += 100;
@@ -132,7 +132,7 @@ public class DashboardPage : Page
         CreateSectionTitle("快速操作", 0, y);
         y += 30;
 
-        var actionCard = CreateCard(0, y, 720, 60);
+        var actionCard = CreateCard(0, y, ContentWidth, 60);
 
         var scanBtn = new AccentButton
         {

@@ -77,6 +77,22 @@ public class MainForm : Form
         // 设置托盘
         SetupTrayIcon();
 
+        // 异步初始化已启用的模块（不阻塞 UI 加载）
+        BeginInvoke(async () =>
+        {
+            try
+            {
+                await _appState.Modules.InitializeEnabledModulesAsync();
+                // 模块初始化完成后刷新当前页面
+                if (_pages.TryGetValue(_currentPage, out var page))
+                    page.OnShown();
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, "模块初始化失败");
+            }
+        });
+
         // 首次运行引导
         if (!_appState.Config.FirstRunCompleted)
         {
@@ -128,6 +144,12 @@ public class MainForm : Form
         _closeBtn.Click += (s, e) => Close();
 
         _titleBar.Controls.AddRange(new Control[] { _minBtn, _maxBtn, _closeBtn });
+
+        // 设置按钮初始位置（从右到左排列：关闭、最大化、最小化）
+        PositionTitleBarButtons();
+
+        // 窗口大小变化时重新定位标题栏按钮
+        _titleBar.Resize += (s, e) => PositionTitleBarButtons();
 
         // 确保按钮在最上层
         _minBtn.BringToFront();
@@ -228,6 +250,19 @@ public class MainForm : Form
         _contentArea.BringToFront();
     }
 
+    /// <summary>定位标题栏按钮到右侧（关闭→最大化→最小化）</summary>
+    private void PositionTitleBarButtons()
+    {
+        if (_titleBar == null || _closeBtn == null || _maxBtn == null || _minBtn == null) return;
+        int btnW = 46;
+        int x = _titleBar.Width - btnW;
+        _closeBtn.Location = new Point(x, 0);
+        x -= btnW;
+        _maxBtn.Location = new Point(x, 0);
+        x -= btnW;
+        _minBtn.Location = new Point(x, 0);
+    }
+
     private Button CreateTitleButton(string text, int tag, Color? hoverColor = null)
     {
         var btn = new Button
@@ -278,6 +313,8 @@ public class MainForm : Form
             page.Visible = false;
 
         _pages[key].Visible = true;
+        _pages[key].PerformLayout();
+        _pages[key].OnShown();
         _pages[key].Invalidate();
 
         foreach (var btn in _navButtons)

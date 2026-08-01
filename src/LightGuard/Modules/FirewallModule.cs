@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management;
 using LightGuard.Core;
 using LightGuard.Core.Interfaces;
+using LightGuard.Firewall;
 using LightGuard.Native;
 
 namespace LightGuard.Modules;
@@ -155,6 +156,21 @@ public sealed class FirewallModule : ModuleBase
     /// </summary>
     private bool _hasTakenOverDefender;
 
+    /// <summary>
+    /// 防火墙 ACL 核心管理器（五元组全参数规则管理）
+    /// </summary>
+    private FirewallAclManager? _aclManager;
+
+    /// <summary>
+    /// VPN 接口变更监听器（动态适配拦截策略）
+    /// </summary>
+    private IDisposable? _vpnMonitor;
+
+    /// <summary>
+    /// 获取防火墙 ACL 管理器实例（供 UI 调用）
+    /// </summary>
+    public FirewallAclManager? AclManager => _aclManager;
+
     public FirewallModule(AppState appState) : base(appState)
     {
         // 初始化广告域名列表：合并内置库和配置中的自定义域名
@@ -197,6 +213,19 @@ public sealed class FirewallModule : ModuleBase
 
             // 初始检测 Defender 状态
             _lastDefenderStatus = CheckDefenderStatus();
+
+            // 初始化防火墙 ACL 管理器
+            _aclManager = new FirewallAclManager();
+            if (_aclManager.TestFirewallComConnect())
+            {
+                // 加载已存在的本程序创建的防火墙规则
+                _aclManager.LoadExistingRules();
+                ErrorReporter.Log($"防火墙 ACL 管理器已初始化，加载 {_aclManager.GetAllLocalRules().Count} 条已有规则");
+            }
+            else
+            {
+                ErrorReporter.Log("防火墙 COM 组件连接失败，ACL 功能不可用", "ERROR");
+            }
 
             ErrorReporter.Log($"防火墙模块初始化完成，广告域名 {_adDomains.Count} 条，Defender 已安装: {_lastDefenderStatus.IsInstalled}");
         });
@@ -242,6 +271,23 @@ public sealed class FirewallModule : ModuleBase
 
             // 5. 首次执行可疑连接检测
             DetectSuspiciousConnections();
+
+            // 6. 启动 VPN 接口动态监听（新增 VPN 适配器自动适配拦截策略）
+            if (_aclManager != null)
+            {
+                _vpnMonitor = VpnNetworkTool.MonitorVpnInterfaces(() =>
+                {
+                    try
+                    {
+                        _aclManager.RefreshVpnRules();
+                        ErrorReporter.Log("VPN 接口变更，已自动刷新拦截策略");
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorReporter.Report(ex, "VPN 接口变更刷新失败");
+                    }
+                });
+            }
         });
     }
 
@@ -250,6 +296,10 @@ public sealed class FirewallModule : ModuleBase
     {
         await Task.Run(() =>
         {
+            // 停止 VPN 接口监听
+            _vpnMonitor?.Dispose();
+            _vpnMonitor = null;
+
             // 停止检测定时器
             _detectTimer?.Dispose();
             _detectTimer = null;
@@ -269,6 +319,10 @@ public sealed class FirewallModule : ModuleBase
     {
         _detectTimer?.Dispose();
         _detectTimer = null;
+        _vpnMonitor?.Dispose();
+        _vpnMonitor = null;
+        _aclManager?.Dispose();
+        _aclManager = null;
         _blockedPrograms.Clear();
         _lastConnections.Clear();
     }
@@ -773,6 +827,8 @@ public sealed class FirewallModule : ModuleBase
         var firewallOn = FirewallHelper.IsFirewallEnabled();
         var blockedCount = _blockedPrograms.Count;
         var defenderOn = _lastDefenderStatus.IsInstalled && _lastDefenderStatus.RealTimeProtectionEnabled;
-        return $"防火墙: {(firewallOn ? "已启用" : "未启用")} | 已阻止程序: {blockedCount} | Defender: {(defenderOn ? "运行中" : "未运行")} | 广告域名: {_adDomains.Count} 条";
+        var aclRuleCount = _aclManager?.GetAllLocalRules().Count ?? 0;
+        var vpnCount = VpnNetworkTool.GetAllVpnInterfaceAlias().Count;
+        return $"防火墙: {(firewallOn ? "已启用" : "未启用")} | ACL规则: {aclRuleCount} | 已阻止程序: {blockedCount} | VPN接口: {vpnCount} | Defender: {(defenderOn ? "运行中" : "未运行")} | 广告域名: {_adDomains.Count} 条";
     }
 }

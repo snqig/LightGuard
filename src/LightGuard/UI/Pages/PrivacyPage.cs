@@ -38,7 +38,7 @@ public class PrivacyPage : Page
         CreateSectionTitle("优化状态", 0, y);
         y += 30;
 
-        var statusCard = CreateCard(0, y, 720, 50);
+        var statusCard = CreateCard(0, y, ContentWidth, 50);
         _lastOptimizedLabel = new Label
         {
             Text = GetLastOptimizedText(),
@@ -55,7 +55,7 @@ public class PrivacyPage : Page
         CreateSectionTitle("策略模式", 0, y);
         y += 30;
 
-        var modeCard = CreateCard(0, y, 720, 60);
+        var modeCard = CreateCard(0, y, ContentWidth, 60);
         var modeLabel = new Label
         {
             Text = "选择适用模板：",
@@ -101,7 +101,7 @@ public class PrivacyPage : Page
         CreateSectionTitle("快速操作", 0, y);
         y += 30;
 
-        var actionCard = CreateCard(0, y, 720, 60);
+        var actionCard = CreateCard(0, y, ContentWidth, 60);
 
         _optimizeBtn = new AccentButton
         {
@@ -167,7 +167,7 @@ public class PrivacyPage : Page
                     Font = Theme.HeaderFont,
                     ForeColor = Theme.Accent,
                     Location = new Point(0, y),
-                    Size = new Size(720, 24),
+                    Size = new Size(ContentWidth, 24),
                     BackColor = Color.Transparent
                 };
                 ScrollContent.Controls.Add(groupLabel);
@@ -176,7 +176,7 @@ public class PrivacyPage : Page
                 // 分组下每一项
                 foreach (var item in group)
                 {
-                    var itemCard = CreateCard(0, y, 720, 56);
+                    var itemCard = CreateCard(0, y, ContentWidth, 56);
 
                     var nameLabel = new Label
                     {

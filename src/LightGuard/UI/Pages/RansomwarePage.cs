@@ -41,7 +41,7 @@ public class RansomwarePage : Page
         CreateSectionTitle("病毒库状态", 0, y);
         y += 30;
 
-        var dbCard = CreateCard(0, y, 720, 60);
+        var dbCard = CreateCard(0, y, ContentWidth, 60);
         var sigCount = _module?.GetSignatureCount() ?? 0;
         var lastVirusDb = AppState.Config.Update.LastVirusDbUpdate;
 
@@ -62,7 +62,7 @@ public class RansomwarePage : Page
         CreateSectionTitle("病毒扫描", 0, y);
         y += 30;
 
-        var scanCard = CreateCard(0, y, 720, 100);
+        var scanCard = CreateCard(0, y, ContentWidth, 100);
 
         _quickScanBtn = new AccentButton
         {
@@ -119,7 +119,7 @@ public class RansomwarePage : Page
         CreateSectionTitle("扫描结果", 0, y);
         y += 30;
 
-        var resultCard = CreateCard(0, y, 720, 50);
+        var resultCard = CreateCard(0, y, ContentWidth, 50);
         _resultLabel = new Label
         {
             Text = "尚未执行扫描",
@@ -158,7 +158,7 @@ public class RansomwarePage : Page
             else
             {
                 // 表头
-                var headerCard = CreateCard(0, y, 720, 28);
+                var headerCard = CreateCard(0, y, ContentWidth, 28);
                 var headers = new[] { "威胁名称", "文件路径", "风险等级", "隔离时间", "已断网" };
                 var xPositions = new[] { 8, 180, 440, 530, 620 };
                 var widths = new[] { 168, 256, 84, 86, 80 };
@@ -180,7 +180,7 @@ public class RansomwarePage : Page
 
                 foreach (var threat in display)
                 {
-                    var threatCard = CreateCard(0, y, 720, 24);
+                    var threatCard = CreateCard(0, y, ContentWidth, 24);
 
                     var values = new[]
                     {
@@ -238,7 +238,7 @@ public class RansomwarePage : Page
             else
             {
                 // 表头
-                var headerCard = CreateCard(0, y, 720, 28);
+                var headerCard = CreateCard(0, y, ContentWidth, 28);
                 var headers = new[] { "扫描时间", "文件路径", "威胁名称", "风险等级" };
                 var xPositions = new[] { 8, 160, 460, 600 };
                 var widths = new[] { 148, 296, 136, 100 };
@@ -260,7 +260,7 @@ public class RansomwarePage : Page
 
                 foreach (var entry in display)
                 {
-                    var entryCard = CreateCard(0, y, 720, 24);
+                    var entryCard = CreateCard(0, y, ContentWidth, 24);
 
                     var values = new[]
                     {
