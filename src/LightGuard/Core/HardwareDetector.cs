@@ -29,6 +29,15 @@ public sealed class HardwareProfile
     public bool IsBatteryPowered { get; set; }
     public int BatteryLevel { get; set; } = 100;
 
+    /// <summary>系统架构 (x64 / ARM64 / x86)</summary>
+    public string Architecture { get; set; } = "x64";
+
+    /// <summary>是否为 ARM64 系统</summary>
+    public bool IsArm64 { get; set; }
+
+    /// <summary>是否为服务器系统 (Server 2019/2022)</summary>
+    public bool IsServerEdition { get; set; }
+
     /// <summary>
     /// 判断是否为高配电脑
     /// 规则：内存≥8GB 且 CPU≥4核 且 Win10 1903+
@@ -58,6 +67,7 @@ public static class HardwareDetector
         try { DetectScreen(profile); } catch { }
         try { DetectDisk(profile); } catch { }
         try { DetectBattery(profile); } catch { }
+        try { DetectArchitecture(profile); } catch { }
 
         profile.IsHighEnd = profile.DetermineHighEnd();
         return profile;
@@ -195,6 +205,55 @@ public static class HardwareDetector
             {
                 p.IsBatteryPowered = true;
                 p.BatteryLevel = Convert.ToInt32(obj["EstimatedChargeRemaining"]);
+                break;
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 检测系统架构和版本类型
+    /// 支持：x64 / ARM64 / x86 / Server 2019/2022
+    /// </summary>
+    private static void DetectArchitecture(HardwareProfile p)
+    {
+        // 检测进程架构
+        p.Architecture = RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "ARM64",
+            Architecture.X86 => "x86",
+            Architecture.Arm => "ARM",
+            _ => "Unknown"
+        };
+        p.IsArm64 = RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
+
+        // 检测操作系统架构
+        try
+        {
+            var osArch = RuntimeInformation.OSArchitecture;
+            if (osArch == Architecture.Arm64)
+                p.IsArm64 = true;
+        }
+        catch { }
+
+        // 检测是否为服务器系统
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT Caption, ProductType FROM Win32_OperatingSystem");
+            foreach (var obj in searcher.Get().Cast<ManagementObject>())
+            {
+                var caption = obj["Caption"]?.ToString() ?? "";
+                // ProductType: 1=工作站, 2=域控制器, 3=服务器
+                var productType = Convert.ToInt32(obj["ProductType"] ?? 1);
+                if (productType == 3 || caption.Contains("Server"))
+                {
+                    p.IsServerEdition = true;
+                    // 服务器系统也检测 Win10/Win11 内核版本
+                    if (p.OsBuildNumber >= 22000) p.IsWin11 = true;
+                    else if (p.OsBuildNumber >= 10240) p.IsWin10 = true;
+                }
                 break;
             }
         }

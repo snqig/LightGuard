@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using LightGuard.Core;
 using LightGuard.Core.Interfaces;
+using LightGuard.Security;
 
 namespace LightGuard.Modules;
 
@@ -30,6 +31,14 @@ public sealed class UpdateManifest
     /// <summary>SHA256 校验值</summary>
     [JsonPropertyName("sha256")]
     public string Sha256 { get; set; } = "";
+
+    /// <summary>RSA-2048 数字签名（Base64，防止更新服务器被劫持）</summary>
+    [JsonPropertyName("signature")]
+    public string Signature { get; set; } = "";
+
+    /// <summary>签名算法（RSA-2048-SHA256 / ECDSA-P256-SHA256）</summary>
+    [JsonPropertyName("signatureAlgorithm")]
+    public string SignatureAlgorithm { get; set; } = "RSA-2048-SHA256";
 
     /// <summary>发布说明</summary>
     [JsonPropertyName("releaseNotes")]
@@ -441,6 +450,24 @@ public sealed class UpdateModule : ModuleBase
                 return null;
             }
 
+            // 数字签名校验（防止更新服务器被劫持下发恶意程序）
+            if (!string.IsNullOrEmpty(manifest.Signature))
+            {
+                UpdateProgress?.Invoke("正在验证数字签名...", 95);
+                var sigResult = UpdateSignatureVerifier.VerifyFileSignature(packagePath, manifest.Signature);
+                if (!sigResult.IsValid)
+                {
+                    ErrorReporter.Log($"更新包数字签名验证失败: {sigResult.Error}", "ERROR");
+                    File.Delete(packagePath);
+                    return null;
+                }
+                ErrorReporter.Log($"更新包数字签名验证通过: {sigResult.Algorithm}");
+            }
+            else
+            {
+                ErrorReporter.Log("警告：更新包未包含数字签名，存在安全风险", "WARN");
+            }
+
             ErrorReporter.Log($"更新包下载完成: {packagePath}（{downloadedBytes / 1024} KB）");
             UpdateProgress?.Invoke("下载完成", 100);
             return packagePath;
@@ -469,6 +496,16 @@ public sealed class UpdateModule : ModuleBase
                 ErrorReporter.Log("更新包不存在，无法应用更新", "ERROR");
                 return false;
             }
+
+            // 应用前最终校验：SHA256 + 数字签名双重验证
+            var verifyResult = UpdateSignatureVerifier.VerifyUpdatePackage(
+                packagePath, manifest.Sha256, manifest.Signature);
+            if (!verifyResult.IsValid)
+            {
+                ErrorReporter.Log($"更新包应用前验证失败: {verifyResult.Error}", "ERROR");
+                return false;
+            }
+            ErrorReporter.Log($"更新包应用前验证通过: {verifyResult}");
 
             var appDir = AppContext.BaseDirectory;
             var extractDir = Path.Combine(_updateDir, "app", "extracted");

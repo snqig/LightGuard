@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 v1.0.0)'
+        description: '版本号 (如 v1.0.1)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
@@ -17,6 +17,19 @@ permissions:
 jobs:
   build-and-release:
     runs-on: windows-latest
+
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64
+            label: x64
+            arch: x64
+          - rid: win-arm64
+            label: ARM64
+            arch: arm64
+          - rid: win-x86
+            label: x86
+            arch: x86
 
     steps:
       - name: Checkout code
@@ -36,11 +49,13 @@ jobs:
           } elseif ($env:INPUT_VERSION) {
             $version = $env:INPUT_VERSION
           } else {
-            $version = "v1.0.0"
+            $version = "v1.0.1"
           }
           $numericVersion = $version -replace '^v', ''
           Write-Host "Version: $version"
           Write-Host "Numeric: $numericVersion"
+          Write-Host "RID: ${{ matrix.rid }}"
+          Write-Host "Label: ${{ matrix.label }}"
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "numeric=$numericVersion" >> $env:GITHUB_OUTPUT
 
@@ -50,30 +65,31 @@ jobs:
       - name: Build
         run: dotnet build src/LightGuard/LightGuard.csproj -c Release --no-restore
 
-      - name: Publish single-file EXE
+      - name: Publish single-file EXE (${{ matrix.label }})
         run: |
           dotnet publish src/LightGuard/LightGuard.csproj `
             -c Release `
-            -r win-x64 `
+            -r ${{ matrix.rid }} `
             --self-contained true `
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:EnableCompressionInSingleFile=true `
-            -o ./publish
+            -o ./publish/${{ matrix.rid }}
 
-      - name: Rename EXE with version
+      - name: Rename EXE with version and arch
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.numeric }}"
-          $src = "./publish/LightGuard.exe"
-          $dst = "./publish/LightGuard-v$version.exe"
+          $rid = "${{ matrix.rid }}"
+          $src = "./publish/$rid/LightGuard.exe"
+          $dst = "./publish/$rid/LightGuard-v$version-$rid.exe"
           if (Test-Path $src) {
             Copy-Item $src $dst
             Write-Host "Created: $dst"
             $size = [math]::Round((Get-Item $dst).Length / 1MB, 2)
             Write-Host "Size: $size MB"
           } else {
-            Write-Host "ERROR: LightGuard.exe not found in publish/"
+            Write-Host "ERROR: LightGuard.exe not found in publish/$rid/"
             exit 1
           }
 
@@ -81,10 +97,21 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.numeric }}"
-          Compress-Archive -Path "./publish/LightGuard.exe" -DestinationPath "./LightGuard-v$version.zip" -Force
-          Write-Host "Created LightGuard-v$version.zip"
+          $rid = "${{ matrix.rid }}"
+          Compress-Archive -Path "./publish/$rid/LightGuard.exe" -DestinationPath "./LightGuard-v$version-$rid.zip" -Force
+          Write-Host "Created LightGuard-v$version-$rid.zip"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LightGuard-${{ matrix.rid }}
+          path: |
+            ./publish/${{ matrix.rid }}/LightGuard.exe
+            ./publish/${{ matrix.rid }}/LightGuard-v${{ steps.version.outputs.numeric }}-${{ matrix.rid }}.exe
+            ./LightGuard-v${{ steps.version.outputs.numeric }}-${{ matrix.rid }}.zip
 
       - name: Create GitHub Release
+        if: matrix.rid == 'win-x64'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
@@ -94,35 +121,49 @@ jobs:
 
             ## 功能特性
 
-            - 超低资源全能安全防护工具 (Win10/Win11)
+            - 超低资源全能安全防护工具 (Win10/Win11/Server)
             - 系统隐私一键加固
             - 流氓软件一键净化 (WPS/360/Edge/2345)
-            - 四层勒索病毒防护体系
+            - 原生防火墙 ACL 五元组可视化管理
+            - 四层勒索病毒防护 + 进程行为沙箱隔离
+            - 离线病毒库兜底（200+ 条特征，断网可用）
+            - RSA-2048 数字签名校验更新包
             - AES256 加密智能备份 + 伪装备份防勒索
-            - 原生防火墙可视化管理
-            - 三层全自动无感更新系统
+            - 三层全自动无感更新系统（签名校验）
             - 现代 Win11 Fluent UI 双模式自适应
             - 单 EXE 绿色免安装
+            - 多架构支持：x64 / ARM64 / x86
 
             ## 下载
 
-            - `LightGuard.exe` - 单文件绿色版 (自包含 .NET 8 运行时)
-            - `LightGuard-v${{ steps.version.outputs.numeric }}.zip` - 压缩包
+            | 文件 | 架构 | 说明 |
+            |------|------|------|
+            | `LightGuard.exe` | x64 | 单文件绿色版 (自包含 .NET 8 运行时) |
+            | `LightGuard-v${{ steps.version.outputs.numeric }}-win-x64.zip` | x64 | 压缩包 |
+            | `LightGuard-v${{ steps.version.outputs.numeric }}-win-arm64.exe` | ARM64 | ARM64 设备专用 |
+            | `LightGuard-v${{ steps.version.outputs.numeric }}-win-arm64.zip` | ARM64 | ARM64 压缩包 |
+            | `LightGuard-v${{ steps.version.outputs.numeric }}-win-x86.exe` | x86 | 32位系统专用 |
+            | `LightGuard-v${{ steps.version.outputs.numeric }}-win-x86.zip` | x86 | 32位压缩包 |
 
             ## 使用方法
 
-            1. 下载 `LightGuard.exe`
+            1. 根据你的系统架构下载对应的 `LightGuard.exe`
             2. 右键以管理员身份运行
             3. 首次启动跟随引导选择模式即可
 
             ## 系统要求
 
-            - Windows 10 1903+ / Windows 11
+            - Windows 10 1903+ / Windows 11 / Windows Server 2019+
+            - 支持 x64 / ARM64 / x86 架构
             - 管理员权限
           files: |
-            ./publish/LightGuard.exe
-            ./publish/LightGuard-v${{ steps.version.outputs.numeric }}.exe
-            ./LightGuard-v${{ steps.version.outputs.numeric }}.zip
+            ./publish/win-x64/LightGuard.exe
+            ./publish/win-x64/LightGuard-v${{ steps.version.outputs.numeric }}-win-x64.exe
+            ./LightGuard-v${{ steps.version.outputs.numeric }}-win-x64.zip
+            ./publish/win-arm64/LightGuard-v${{ steps.version.outputs.numeric }}-win-arm64.exe
+            ./LightGuard-v${{ steps.version.outputs.numeric }}-win-arm64.zip
+            ./publish/win-x86/LightGuard-v${{ steps.version.outputs.numeric }}-win-x86.exe
+            ./LightGuard-v${{ steps.version.outputs.numeric }}-win-x86.zip
           draft: false
           prerelease: false
           generate_release_notes: true

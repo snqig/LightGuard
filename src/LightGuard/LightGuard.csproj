@@ -9,17 +9,17 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.0.1</Version>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
-    <Description>LightGuard v1.0.0 - 超低资源全能安全防护工具</Description>
+    <Description>LightGuard v1.0.1 - 超低资源全能安全防护工具</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- 不固定 RuntimeIdentifier，支持 win-x64/win-arm64/win-x86 多架构构建 -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <InvariantGlobalization>false</InvariantGlobalization>
