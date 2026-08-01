@@ -65,6 +65,9 @@ public class MainForm : Form
         CreatePages();
         ApplyMicaEffect();
 
+        // 订阅主题变更事件
+        Theme.ThemeChanged += OnThemeChanged;
+
         // 注册模块
         _appState.RegisterModules();
 
@@ -107,25 +110,29 @@ public class MainForm : Form
         };
         _titleBar.Controls.Add(_titleLabel);
 
-        // 窗口控制按钮
+        // 窗口控制按钮 — 使用 Anchor 确保始终贴右显示
         _minBtn = CreateTitleButton("—", HTMINBUTTON);
-        _minBtn.Location = new Point(Width - 130, 0);
+        _minBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _minBtn.Click += (s, e) => WindowState = FormWindowState.Minimized;
 
         _maxBtn = CreateTitleButton("□", HTMAXBUTTON);
-        _maxBtn.Location = new Point(Width - 90, 0);
+        _maxBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _maxBtn.Click += (s, e) =>
         {
             WindowState = WindowState == FormWindowState.Maximized
                 ? FormWindowState.Normal : FormWindowState.Maximized;
         };
 
-        _closeBtn = CreateTitleButton("✕", HTCLOSE);
-        _closeBtn.Location = new Point(Width - 45, 0);
+        _closeBtn = CreateTitleButton("✕", HTCLOSE, Color.FromArgb(196, 43, 28));
+        _closeBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _closeBtn.Click += (s, e) => Close();
-        _closeBtn.BackColor = Color.FromArgb(196, 43, 28); // 关闭按钮悬停红色
 
         _titleBar.Controls.AddRange(new Control[] { _minBtn, _maxBtn, _closeBtn });
+
+        // 确保按钮在最上层
+        _minBtn.BringToFront();
+        _maxBtn.BringToFront();
+        _closeBtn.BringToFront();
 
         // 标题栏双击最大化
         _titleBar.DoubleClick += (s, e) =>
@@ -221,21 +228,24 @@ public class MainForm : Form
         _contentArea.BringToFront();
     }
 
-    private Button CreateTitleButton(string text, int tag)
+    private Button CreateTitleButton(string text, int tag, Color? hoverColor = null)
     {
         var btn = new Button
         {
             Text = text,
-            Size = new Size(45, Theme.TitleBarHeight),
+            Size = new Size(46, Theme.TitleBarHeight),
             FlatStyle = FlatStyle.Flat,
-            Font = new Font("Segoe UI", 10F, GraphicsUnit.Pixel),
+            Font = new Font("Segoe UI", 12F, FontStyle.Regular, GraphicsUnit.Pixel),
             ForeColor = Theme.TextPrimary,
             BackColor = Theme.TitleBar,
             TextAlign = ContentAlignment.MiddleCenter,
-            Tag = tag
+            Tag = tag,
+            Visible = true
         };
         btn.FlatAppearance.BorderSize = 0;
-        btn.MouseEnter += (s, e) => btn.BackColor = Theme.CardHover;
+        btn.FlatAppearance.MouseOverBackColor = hoverColor ?? Theme.CardHover;
+        btn.FlatAppearance.MouseDownBackColor = hoverColor ?? Theme.CardHover;
+        btn.MouseEnter += (s, e) => btn.BackColor = hoverColor ?? Theme.CardHover;
         btn.MouseLeave += (s, e) => btn.BackColor = Theme.TitleBar;
         return btn;
     }
@@ -284,7 +294,8 @@ public class MainForm : Form
         try
         {
             Win32.EnableMica(Handle);
-            Win32.EnableDarkMode(Handle);
+            // 根据当前主题设置标题栏深色/浅色模式
+            Win32.SetDarkMode(Handle, Theme.IsDark);
             Win32.EnableRoundedCorners(Handle);
         }
         catch { }
@@ -361,12 +372,30 @@ public class MainForm : Form
 
     #region 窗口重绘
 
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        RepositionTitleButtons();
+    }
+
+    /// <summary>
+    /// 重新定位标题栏按钮到右侧
+    /// 在 OnLoad 和 OnResize 中调用，确保按钮在面板布局完成后正确定位
+    /// </summary>
+    private void RepositionTitleButtons()
+    {
+        if (_titleBar == null) return;
+        int w = _titleBar.Width;
+        if (w <= 0) w = Width;
+        if (_minBtn != null) _minBtn.Location = new Point(w - 138, 0);
+        if (_maxBtn != null) _maxBtn.Location = new Point(w - 92, 0);
+        if (_closeBtn != null) _closeBtn.Location = new Point(w - 46, 0);
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        if (_minBtn != null) _minBtn.Location = new Point(Width - 130, 0);
-        if (_maxBtn != null) _maxBtn.Location = new Point(Width - 90, 0);
-        if (_closeBtn != null) _closeBtn.Location = new Point(Width - 45, 0);
+        RepositionTitleButtons();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -398,6 +427,27 @@ public class MainForm : Form
 
     #endregion
 
+    /// <summary>
+    /// 主题变更时刷新所有控件颜色
+    /// </summary>
+    private void OnThemeChanged()
+    {
+        if (_titleBar != null) _titleBar.BackColor = Theme.TitleBar;
+        if (_sidebar != null) _sidebar.BackColor = Theme.SidebarBg;
+        if (_contentArea != null) _contentArea.BackColor = Theme.Background;
+        if (_titleLabel != null) _titleLabel.ForeColor = Theme.TextPrimary;
+        BackColor = Theme.Background;
+
+        // 刷新标题栏按钮
+        if (_minBtn != null) { _minBtn.ForeColor = Theme.TextPrimary; _minBtn.BackColor = Theme.TitleBar; }
+        if (_maxBtn != null) { _maxBtn.ForeColor = Theme.TextPrimary; _maxBtn.BackColor = Theme.TitleBar; }
+        if (_closeBtn != null) { _closeBtn.ForeColor = Theme.TextPrimary; _closeBtn.BackColor = Theme.TitleBar; }
+
+        // 重新应用 Mica 效果
+        ApplyMicaEffect();
+        Invalidate(true);
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (e.CloseReason == CloseReason.UserClosing && _trayIcon != null)
@@ -409,6 +459,7 @@ public class MainForm : Form
         }
 
         _appState.Dispose();
+        Theme.ThemeChanged -= OnThemeChanged;
         _trayIcon?.Dispose();
         base.OnFormClosing(e);
     }

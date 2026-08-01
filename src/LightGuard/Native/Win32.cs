@@ -138,6 +138,20 @@ internal static class Win32
     }
 
     /// <summary>
+    /// 设置标题栏深色/浅色模式
+    /// </summary>
+    public static bool SetDarkMode(IntPtr hwnd, bool dark)
+    {
+        try
+        {
+            int val = dark ? 1 : 0;
+            var result = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref val, sizeof(int));
+            return result == 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// 启用圆角窗口
     /// </summary>
     public static bool EnableRoundedCorners(IntPtr hwnd)

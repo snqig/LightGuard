@@ -44,18 +44,61 @@ public static class Theme
         public static readonly Color TextSecondary = Color.FromArgb(96, 96, 96);      // #606060
         public static readonly Color TextTertiary = Color.FromArgb(140, 140, 140);    // #8C8C8C
         public static readonly Color Success = Color.FromArgb(46, 125, 50);           // #2E7D32
-        public static readonly Color Warning = Color.FromArgb(183, 28, 28);           // #B71C1C... no, 230, 81, 0
+        public static readonly Color Warning = Color.FromArgb(230, 81, 0);            // #E65100
         public static readonly Color Error = Color.FromArgb(183, 28, 28);             // #B71C1C
         public static readonly Color TitleBar = Color.FromArgb(248, 248, 248);        // #F8F8F8
     }
 
     // ===== 当前主题（运行时切换） =====
     private static bool _isDark = true;
+    private static bool _autoFollowSystem = true;
 
     public static bool IsDark
     {
         get => _isDark;
         set { _isDark = value; ThemeChanged?.Invoke(); }
+    }
+
+    /// <summary>是否自动跟随系统主题</summary>
+    public static bool AutoFollowSystem
+    {
+        get => _autoFollowSystem;
+        set
+        {
+            _autoFollowSystem = value;
+            if (value) SyncWithSystem();
+        }
+    }
+
+    /// <summary>
+    /// 检测 Windows 系统当前是否为深色模式
+    /// 读取注册表 HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme
+    /// 0 = 深色, 1 = 浅色
+    /// </summary>
+    public static bool IsSystemDarkMode()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            if (key != null)
+            {
+                var value = key.GetValue("AppsUseLightTheme");
+                if (value is int i)
+                    return i == 0; // 0=深色, 1=浅色
+            }
+        }
+        catch { }
+        return true; // 默认深色
+    }
+
+    /// <summary>
+    /// 同步主题与系统设置
+    /// </summary>
+    public static void SyncWithSystem()
+    {
+        _isDark = IsSystemDarkMode();
+        ThemeChanged?.Invoke();
     }
 
     public static event Action? ThemeChanged;
@@ -167,10 +210,11 @@ public static class Theme
     }
 
     /// <summary>
-    /// 根据UI模式初始化主题
+    /// 根据UI模式初始化主题，自动跟随系统深浅色
     /// </summary>
     public static void InitFromMode(UiMode mode)
     {
-        _isDark = mode == UiMode.Modern;
+        // 始终跟随系统深浅色主题
+        _isDark = IsSystemDarkMode();
     }
 }
