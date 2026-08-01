@@ -1,0 +1,56 @@
+# ===== .NET / Visual Studio =====
+bin/
+obj/
+*.dll
+*.pdb
+*.exe
+*.cache
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.vs/
+*.vspscc
+*.vssscc
+
+# ===== Build outputs =====
+publish/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+artifacts/
+pack/
+
+# ===== NuGet =====
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+# ===== IDE =====
+.vs/
+.idea/
+*.swp
+*~
+*.DS_Store
+
+# ===== OS =====
+Thumbs.db
+desktop.ini
+
+# ===== Logs / Temp =====
+*.log
+tmp/
+temp/
+
+# ===== LightGuard runtime data =====
+config.json
+backups/
+logs/
+data/
+virusdb/
+updates/

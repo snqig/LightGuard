@@ -1,0 +1,128 @@
+name: CD - Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match 'refs/tags/(v.*)') {
+            $version = $matches[1]
+          } elseif ($env:INPUT_VERSION) {
+            $version = $env:INPUT_VERSION
+          } else {
+            $version = "v1.0.0"
+          }
+          $numericVersion = $version -replace '^v', ''
+          Write-Host "Version: $version"
+          Write-Host "Numeric: $numericVersion"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "numeric=$numericVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Restore dependencies
+        run: dotnet restore src/LightGuard/LightGuard.csproj
+
+      - name: Build
+        run: dotnet build src/LightGuard/LightGuard.csproj -c Release --no-restore
+
+      - name: Publish single-file EXE
+        run: |
+          dotnet publish src/LightGuard/LightGuard.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -o ./publish
+
+      - name: Rename EXE with version
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.numeric }}"
+          $src = "./publish/LightGuard.exe"
+          $dst = "./publish/LightGuard-v$version.exe"
+          if (Test-Path $src) {
+            Copy-Item $src $dst
+            Write-Host "Created: $dst"
+            $size = [math]::Round((Get-Item $dst).Length / 1MB, 2)
+            Write-Host "Size: $size MB"
+          } else {
+            Write-Host "ERROR: LightGuard.exe not found in publish/"
+            exit 1
+          }
+
+      - name: Create release archive
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.numeric }}"
+          Compress-Archive -Path "./publish/LightGuard.exe" -DestinationPath "./LightGuard-v$version.zip" -Force
+          Write-Host "Created LightGuard-v$version.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: LightGuard ${{ steps.version.outputs.version }}
+          body: |
+            # LightGuard ${{ steps.version.outputs.version }}
+
+            ## 功能特性
+
+            - 超低资源全能安全防护工具 (Win10/Win11)
+            - 系统隐私一键加固
+            - 流氓软件一键净化 (WPS/360/Edge/2345)
+            - 四层勒索病毒防护体系
+            - AES256 加密智能备份 + 伪装备份防勒索
+            - 原生防火墙可视化管理
+            - 三层全自动无感更新系统
+            - 现代 Win11 Fluent UI 双模式自适应
+            - 单 EXE 绿色免安装
+
+            ## 下载
+
+            - `LightGuard.exe` - 单文件绿色版 (自包含 .NET 8 运行时)
+            - `LightGuard-v${{ steps.version.outputs.numeric }}.zip` - 压缩包
+
+            ## 使用方法
+
+            1. 下载 `LightGuard.exe`
+            2. 右键以管理员身份运行
+            3. 首次启动跟随引导选择模式即可
+
+            ## 系统要求
+
+            - Windows 10 1903+ / Windows 11
+            - 管理员权限
+          files: |
+            ./publish/LightGuard.exe
+            ./publish/LightGuard-v${{ steps.version.outputs.numeric }}.exe
+            ./LightGuard-v${{ steps.version.outputs.numeric }}.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
