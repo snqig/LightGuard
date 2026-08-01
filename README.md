@@ -1,220 +1,234 @@
 <div align="center">
 
-# LightGuard V2.0
+# LightGuard V2.0 终极完整版
 
-### 终极完整版 - Windows 全能安全防护
+### Windows 内网安全容灾审计一体化平台
 
-超低资源 · 现代 Win11 UI · 原生防火墙 ACL · 全自动勒索防护 · 加密伪装备份 · 多语种 Unicode 兼容
+**落尘（Luochen）独立原创开发**
+
+纯用户态 · 无驱动蓝屏 · ETW+YARA 双层勒索防御 · AES-256-GCM 加密抗勒索备份 · SMB 文件服务器审计
 
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/Platform-Win10%2FWin11%2FServer-0078D4)](https://learn.microsoft.com/windows/)
 [![Arch](https://img.shields.io/badge/Arch-x64%2Farm64%2Fx86-orange)](https://learn.microsoft.com/dotnet/core/rid-catalog)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.1-blue)](https://github.com/snqig/LightGuard/releases)
+[![Release](https://img.shields.io/badge/Release-v2.0-blue)](https://github.com/snqig/LightGuard/releases)
 
 </div>
 
 ---
 
+> © 2026 落尘（Luochen） 保留所有权利
+>
+> 本项目全套架构设计、加密备份分片算法、抗勒索备份机制、ETW+YARA 双层防御、文件服务器 SMB 行为审计引擎、全粒度恢复系统均为落尘独立原创开发。未经作者书面许可，禁止拆分核心模块、逆向、二次封装、商用售卖、冒充自研。
+
+---
+
 ## 目录
 
-- [概述](#概述)
-- [V1.0.1 安全加固](#v101-安全加固)
-- [功能特性](#功能特性)
-- [防火墙 ACL 模块](#防火墙-acl-模块)
-- [勒索防护体系](#勒索防护体系)
-- [更新安全机制](#更新安全机制)
+- [项目概述](#项目概述)
+- [七大核心模块](#七大核心模块)
+- [ETW+YARA 双层勒索防御](#etwyara-双层勒索防御)
+- [加密抗勒索备份体系](#加密抗勒索备份体系)
+- [全链路灾难恢复](#全链路灾难恢复)
+- [SMB 文件服务器审计](#smb-文件服务器审计)
+- [全局日志审计](#全局日志审计)
 - [系统要求](#系统要求)
 - [快速开始](#快速开始)
 - [项目结构](#项目结构)
 - [技术架构](#技术架构)
 - [构建](#构建)
+- [三期开发规划](#三期开发规划)
 - [版本历史](#版本历史)
-- [License](#license)
+- [版权说明](#版权说明)
 
 ---
 
-## 概述
+## 项目概述
 
-LightGuard 是一款 Windows 桌面全能安全防护软件，采用模块化架构设计，集成了系统隐私加固、流氓软件净化、原生防火墙 ACL 管理、勒索病毒防护、加密智能备份和自动更新六大功能模块。单 EXE 绿色免安装，自包含 .NET 8 运行时，开箱即用。
+LightGuard 是落尘独立原创开发的 Windows 内网轻量化安全容灾审计一体化平台，搭载市面开源工具不具备的自研加密备份、服务器审计、双层勒索防御三大核心能力。
 
-### 核心亮点
+### 解决行业四大痛点
 
-| 特性 | 说明 |
-|------|------|
-| 单文件绿色版 | 自包含 .NET 8 运行时，无需安装依赖 |
-| 双模式 UI | 高配 Mica 云母 + 圆角 / 低配极简，自动适配硬件 |
-| 鼠标优先交互 | 所有配置通过下拉/复选/滑块/浏览弹窗完成，最小化键盘输入 |
-| 多语种 Unicode | 支持简/繁中文、英文、越南语、印地语、阿拉伯语规则命名 |
-| 智能后台调度 | 游戏全屏/低电量/前台操作自动暂停，Idle 优先级零干扰 |
-| 零驱动安全 | 纯用户态实现，无内核驱动，无蓝屏风险 |
-| 多架构支持 | x64 / ARM64 / x86 全架构构建，兼容 Server 2019/2022 |
+| 痛点 | LightGuard 解决方案 |
+|------|---------------------|
+| 安全软件体积臃肿、驱动冲突蓝屏 | 纯用户态实现，无内核驱动，无蓝屏风险 |
+| 备份工具无加密，局域网共享可随意查看 | AES-256-GCM 加密 + .lgbackup 私有格式，内网防偷看 |
+| 文件服务器缺少操作追溯 | SMB 双采集审计引擎，全流程可追溯可预警 |
+| 仅能事后查杀病毒，无法提前识别勒索 | ETW 行为监控 + YARA 特征核验，事前主动拦截 |
+
+### 设计约束
+
+- 不做全盘病毒扫描、不搭建程序沙箱、不使用内核 Hook 驱动
+- 核心能力聚焦：异常行为检测、文件特征核验、防火墙流量管控、系统广告净化、加密分片备份、灾难数据恢复、服务器操作审计
+- 全平台兼容 x86/x64/ARM64，适配 Win10/11 客户端、Windows Server 2019/2022 文件服务器
 
 ---
 
-## V1.0.1 安全加固
+## 七大核心模块
 
-本次更新针对四项关键安全缺陷进行了深度修复：
+全部由落尘原创设计，采用模块化架构（IModule 接口 + ModuleBase 基类）：
 
-### 1. 离线病毒库兜底
+| 模块 | 分类 | 功能描述 |
+|------|------|----------|
+| 系统隐私加固 + 防火墙 ACL | Privacy / Firewall | 12项隐私优化 + 原生 COM 五元组规则 + VPN 防绕过 + 4套预设模板 |
+| ETW+YARA 双层勒索防御 | Ransomware | ETW 实时行为监控 + YARA 按需特征核验 + 进程挂起隔离 + 自动断网 |
+| 全域三层广告屏蔽 | Cleanup | Hosts 域名拦截 + 防火墙流量管控 + 注册表配置 |
+| 加密抗勒索分片备份 | Backup | AES-256-GCM 加密 + .lgbackup 私有格式 + 五层粒度 + SMB 容灾 |
+| 灾难恢复系统 | Recovery | 三种恢复模式 + 裸机救援 + 版本回溯 + 在线预览 |
+| 数据库冷热备份 | DatabaseBackup | SQLite/MySQL/MariaDB/SQL Server/Access 热备份 + 加密 |
+| SMB 文件服务器审计 | Audit | NTFS SACL + ETW 双采集 + 风险识别 + 告警联动 |
 
-**问题**：勒索防护依赖规则库自动更新，断网环境下无本地离线病毒库兜底。
+---
 
-**修复**：新增 `OfflineVirusDb` 离线特征库引擎，内置 200+ 条勒索软件特征：
+## ETW+YARA 双层勒索防御
 
-| 特征类别 | 数量 | 检测方式 |
-|----------|------|----------|
-| 加密后扩展名 | 120+ | `.wcry` `.locky` `.cerber` `.djvu` 等已知家族扩展名 |
-| 勒索说明文件 | 30+ | `how_to_decrypt.txt` `README_RECOVER.txt` 等文件名模式 |
-| 字节内容特征 | 30+ | WannaCry 标记、Bitcoin 地址模式、Tor Onion 链接 |
-| 可疑进程名 | 40+ | `mssecsvc.exe` `tasksche.exe` 等已知勒索进程 |
-| 系统进程白名单 | 40+ | `svchost.exe` `csrss.exe` 等核心进程永不被误判 |
+落尘原创的轻量化勒索防御架构，区别于传统杀毒软件事后查杀模式。
 
-断网环境下自动启用离线库，联网后合并在线特征库去重加载。
+### 第一层：ETW 行为监控（拦截未知勒索）
 
-### 2. 进程行为沙箱隔离
+实时监控五类高危风险动作：
 
-**问题**：无进程行为沙箱隔离，仅靠防火墙 + 文件备份被动防护，无法主动阻断未知勒索程序。
+| 行为类型 | 检测规则 | 风险等级 |
+|----------|----------|----------|
+| 批量篡改文件后缀 | 10秒内修改30+文件后缀 | High |
+| 短时间大量加密写入 | 10秒内对50+高价值文件写入 | High |
+| 遍历全盘目录 | 30秒内遍历200+目录 | Medium |
+| 删除 VSS 卷影副本 | 检测 vssadmin.exe 调用 | Critical |
+| 批量移动加密文件 | 10秒内移动20+文件 | High |
 
-**修复**：新增 `ProcessGuard` 进程行为沙箱引擎，实现主动防护：
+风险触发后自动执行：挂起恶意进程 → 防火墙应急断网 → 弹窗高危告警 → 锁定系统卷影备份
 
-| 能力 | 说明 |
-|------|------|
-| 进程启动监控 | WMI 事件监听 `Win32_ProcessStartTrace`，实时感知新进程 |
-| 行为模式分析 | 批量文件操作检测（10秒内修改30+文件）、快速加密检测（3秒内修改同一文件3次） |
-| 进程挂起隔离 | `NtSuspendProcess` 挂起可疑进程，不立即终止，保留取证现场 |
-| 自动断网 | Critical 级别威胁触发防火墙全端口阻断 |
-| 白名单保护 | 40+ 系统核心进程永不被隔离，避免误杀导致系统崩溃 |
-| 降级容错 | WMI 不可用时自动降级为定时扫描模式 |
+### 第二层：YARA 特征核验（精准识别已知勒索）
 
-### 3. 更新包数字签名校验
+- 不进行全盘扫描，仅行为异常触发后对目标文件按需扫描，极低资源占用
+- 内置离线勒索规则库（200+ 条特征），支持签名校验后的规则在线更新
+- 误报优化：Windows 系统目录 + 安全软件路径白名单跳过
 
-**问题**：自动更新无校验机制，若更新服务器被劫持，可能下发恶意程序。
+### 双层协同
 
-**修复**：新增 `UpdateSignatureVerifier` 数字签名校验引擎，双重验证：
+```
+ETW 捕获未知异常行为
+        ↓
+YARA 对目标进程按需特征核验
+        ↓
+    综合判定
+    ├─ ETW + YARA 双重确认 → Critical（立即断网+隔离）
+    ├─ 仅 ETW 触发 → High（挂起进程+告警）
+    └─ VSS 删除行为 → Critical（无需 YARA 核验）
+```
 
-| 校验层 | 算法 | 作用 |
+---
+
+## 加密抗勒索备份体系
+
+落尘原创的局域网私有加密容灾系统，核心解决两大痛点：内网防偷看 + 抗勒索破坏。
+
+### 加密算法套件
+
+| 用途 | 算法 | 说明 |
+|------|------|------|
+| 存储加密（默认） | AES-256-GCM | 加密+完整性校验，篡改任意字节解密失败 |
+| ARM/低配设备 | ChaCha20-Poly1305 | 自动切换 |
+| 国密合规（可选） | SM4 | 对称加密 |
+| 密钥派生 | PBKDF2-HMAC-SHA256 | 10万次迭代+32字节随机盐，抵御彩虹表 |
+| 完整性校验 | SHA-256 | 分片独立哈希 + 整包全局哈希 |
+| 传输加密 | SMB over TLS 1.3 | 局域网防抓包 |
+| 权限隔离 | RSA-2048 | 公私钥分离，员工只能上传无法解密 |
+
+### 抗勒索核心机制
+
+- **私有备份格式** `.lgbackup` — 勒索病毒无法识别、无法加密、无法破坏
+- **GCM 完整性校验** — 备份文件被修改后直接标记损坏，拒绝恢复
+- **密钥本地存储** — 解密密钥永不存储在局域网服务器，只在本机
+
+### 五层全粒度备份
+
+| 层级 | 说明 | 特性 |
+|------|------|------|
+| 单文件备份 | 凭证、配置、密钥 | 增量、哈希校验、版本留存 |
+| 整目录备份 | 桌面、文档、项目目录 | 黑名单过滤缓存/临时文件 |
+| 分区镜像备份 | C盘/D盘 | VSS 卷影副本热备份，无需关机 |
+| 整块硬盘备份 | 扇区级完整镜像 | 整机迁移、硬盘报废救援 |
+| 数据库备份 | SQLite/MySQL/MariaDB/SQL Server/Access | 整库/单表/事务日志增量热备份 |
+
+### 备份策略
+
+全量备份、增量备份、差异备份、自动合成全量；支持 SMB 断点续传、传输限速、离线缓存、上线自动同步。
+
+### 自动生命周期管理
+
+- 按保留份数清理（保留最新N套全量+M天增量）
+- 按时长清理（7/30/90天周期）
+- 核心备份锁定保护（锁定备份不被自动删除）
+- 清理全程写入审计日志
+
+### 可视化进度
+
+备份进度：实时百分比、MB/s 速度、文件数、容量、剩余时间、加密状态、当前文件路径
+恢复进度：解密进度、分片恢复、文件写入、校验进度、剩余时间
+
+---
+
+## 全链路灾难恢复
+
+### 强制恢复流程（不可跳过）
+
+```
+读取加密备份包 → 输入密钥/密钥文件 → AES解密 → SHA256完整性校验
+→ 磁盘空间与权限检测 → 选择恢复模式 → 执行数据还原
+```
+
+### 三种安全恢复模式
+
+| 模式 | 说明 | 场景 |
+|------|------|------|
+| 隔离恢复（默认） | 恢复至全新空白目录，不覆盖原文件 | 日常安全恢复 |
+| 增量恢复 | 仅还原版本更新变更的文件 | 节省耗时 |
+| 强制覆盖恢复 | 直接覆盖目标位置 | 系统中毒、磁盘损坏灾难场景 |
+
+### 全场景恢复能力
+
+单文件精准恢复、目录批量恢复、分区镜像恢复、整盘镜像恢复、数据库解密还原、跨设备 SMB 远程恢复、历史版本时间点回溯、备份包在线预览、PE 裸机整机救援。
+
+---
+
+## SMB 文件服务器审计
+
+落尘原创的 Windows 文件服务器共享行为审计模块，部署在 Server 2019/2022 上实现全流程可追溯。
+
+### 双采集融合方案
+
+| 采集层 | 技术 | 作用 |
 |--------|------|------|
-| 第一层 | SHA-256 | 文件完整性校验，确保下载内容未被篡改 |
-| 第二层 | RSA-2048 + SHA-256 | 数字签名验证，确保更新包来自官方服务器 |
+| NTFS SACL 安全事件日志 | Windows Event Log (4663/4624/4660/4670) | 精准持久化存储，兜底审计 |
+| ETW 实时事件追踪 | EventListener + EventSource | 低延迟流式采集，实时告警 |
 
-- 官方 RSA-2048 公钥嵌入程序内部，私钥仅由发布服务器保管
-- 下载后自动校验 SHA-256 + RSA 签名，双重保险
-- 应用更新前再次校验，防止本地文件被篡改
-- 校验失败时拒绝应用更新并记录告警日志
+### 可捕获操作行为
 
-### 4. 多架构与服务器系统支持
+- SMB 远程登录（时间、账号、IP、主机名）
+- 文件读取/写入/修改/覆盖
+- 文件拷贝导出/删除/批量删除/移动/重命名
+- 权限篡改/越权访问失败
+- 智能风险识别：批量外泄、凌晨访问、高频删除
 
-**问题**：仅支持 x64 Windows，不兼容 ARM、32 位系统、服务器系统。
+### 告警联动
 
-**修复**：扩展 `HardwareDetector` 架构检测，支持全平台：
-
-| 架构 | RID | 说明 |
-|------|-----|------|
-| x64 | `win-x64` | 64 位 Intel/AMD（主架构） |
-| ARM64 | `win-arm64` | Snapdragon/Windows on ARM |
-| x86 | `win-x86` | 32 位旧设备兼容 |
-
-- 自动检测 `RuntimeInformation.ProcessArchitecture` 和 `OSArchitecture`
-- 识别 Server 2019/2022（`Win32_OperatingSystem.ProductType`）
-- GitHub Actions CD 工作流支持三架构矩阵构建
-- 服务器系统自动适配 Win10/Win11 内核版本检测
+高危行为弹窗提醒 → 同步推送风险日志至全局审计系统 → 与勒索防护/加密备份模块互通 → 备份目录异常访问直接触发 Critical 告警
 
 ---
 
-## 功能特性
+## 全局日志审计
 
-### 六大核心模块
-
-| 模块 | 功能描述 |
-|------|----------|
-| **系统隐私加固** | 一键关闭遥测/广告/后台应用/搜索联网（12 项优化），家用/办公双模板 |
-| **流氓软件净化** | WPS/360/Edge/2345 全套净化（20 项规则），全局防捆绑 + Hosts 广告屏蔽 |
-| **防火墙管理** | 原生 COM 五元组 ACL 规则、批量目录 EXE 拦截、VPN 防绕过、4 套预设模板 |
-| **勒索病毒防护** | 离线病毒库兜底 + 进程行为沙箱 + 多源病毒库聚合 + VSS 卷影副本秒还原 |
-| **加密智能备份** | AES-256 加密 + .sys 伪装备份防勒索 + NTFS 增量 + NAS/WebDAV |
-| **自动更新** | 三层更新 + RSA-2048 数字签名校验 + SHA-256 完整性验证 |
-
-### 预设防护模板（一键应用）
-
-| 模板 | 防护范围 |
-|------|----------|
-| Adobe 全家桶封锁 | 递归扫描 EXE + 全网卡 80/443 拦截 + VPN 阻断 + Hosts 劫持 + EXE 只读锁定 |
-| 流氓软件更新拦截 | 阻断 WPS/360/Edge 更新服务器 + 全接口 VPN 绕过拦截 + Hosts 劫持 |
-| 勒索高危端口防护 | 全局封禁 135/139/445/3389 入站流量（TCP + UDP） |
-| 勒索应急断网 | 最高优先级，可疑进程全端口阻断所有网卡流量 + EXE 锁定 |
-
----
-
-## 防火墙 ACL 模块
-
-基于 Windows 原生 `INetFwPolicy2` COM 接口实现。
-
-### 三大约束
-
-1. **原生 COM 最优方案** — 零驱动、系统原生支持，兼容 Win10/Win11/Server，原生支持网卡接口筛选
-2. **UI 鼠标优先** — 全下拉/复选/滑块/浏览弹窗，路径只读，端口地址快捷模板，仅备注可选输入
-3. **Unicode 全语种兼容** — GUID 主键不依赖名称，UTF-16 内存 / UTF-8 BOM 导出，6 语种模板
-
-### 规则管理能力
-
-- **单程序精细化管控** — 三种网卡模式（全网卡/仅物理/仅 VPN）+ 三种端口策略
-- **目录批量 EXE 拦截** — 递归扫描 + 勾选白名单 + 整组批量删除 + 失效规则自动清理
-- **全局端口/IP 规则** — 高危端口封禁 + IP 黑名单 + 代理端口拦截
-- **VPN 防绕过** — 虚拟网卡识别 + CIDR 网段提取 + 动态监听接口变更
-- **导入导出** — JSON UTF-8 BOM 编码，多语言文本无损备份还原
-
----
-
-## 勒索防护体系
-
-V1.0.1 勒索防护升级为五层终极防护体系：
-
-```
-┌──────────────────────────────────────────────────┐
-│  第五层：VSS 卷影副本（创建/还原/列出/清理）      │
-├──────────────────────────────────────────────────┤
-│  第四层：实时监控（高配）/ 闲置定时扫描（低配）    │
-│          + 进程行为沙箱主动隔离                    │
-├──────────────────────────────────────────────────┤
-│  第三层：进程行为沙箱（ProcessGuard）              │
-│          批量文件操作检测 + 进程挂起 + 自动断网     │
-├──────────────────────────────────────────────────┤
-│  第二层：智能双引擎扫描（特征匹配 + 行为启发）      │
-├──────────────────────────────────────────────────┤
-│  第一层：离线病毒库（200+条）+ 多源在线库聚合       │
-│          ClamAV / Neo23x0 YARA / VirusTotal       │
-└──────────────────────────────────────────────────┘
-```
-
-### 离线病毒库覆盖范围
-
-- **WannaCry / WannaCry2** — `.wcry` `.wncry` `.wncryt` + 进程 `mssecsvc.exe` `tasksche.exe`
-- **Locky / Cerber / GandCrab** — `.locky` `.cerber` `.gandcrab` + 字节特征匹配
-- **CryptoLocker / CryptoWall** — `.encrypted` `.crypto` + 勒索说明文件检测
-- **Djvu / STOP** — `.djvu` `.stop` `.rumba` + 30+ 变种扩展名
-- **Conti / REvil / BlackCat** — 高危家族进程名 + 行为模式检测
-
----
-
-## 更新安全机制
-
-V1.0.1 更新模块新增双重安全校验：
-
-| 阶段 | 校验内容 | 失败处理 |
-|------|----------|----------|
-| 下载完成 | SHA-256 完整性校验 | 删除文件，记录告警 |
-| 下载完成 | RSA-2048 数字签名验证 | 拒绝存储，记录告警 |
-| 应用前 | SHA-256 + RSA 二次校验 | 拒绝应用，记录告警 |
-
-```
-更新流程：
-  获取清单 → 下载包 → SHA-256 校验 → RSA-2048 签名验证
-                                              ↓ 通过
-                                    应用差分更新 → 重启替换
-                                              ↓ 失败
-                                    拒绝更新 + 告警日志
-```
+| 功能 | 说明 |
+|------|------|
+| 日志分级 | 信息 / 警告 / 错误 / 高危 |
+| 日志分类 | 备份、加解密、校验、SMB连接、自动清理、数据库、勒索告警、文件审计、系统、恢复 |
+| 加密防篡改 | AES-256-GCM 加密存储，按天滚动 |
+| 查询检索 | 时间轴、多条件筛选、关键词搜索 |
+| 报表导出 | CSV / TXT 格式 |
+| 双副本归档 | 本地 + SMB 远端自动同步 |
+| 保留策略 | 默认90天自动清理 |
 
 ---
 
@@ -232,10 +246,7 @@ V1.0.1 更新模块新增双重安全校验：
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/snqig/LightGuard/releases) 下载对应架构的 `LightGuard.exe`
-   - `LightGuard.exe` — x64 默认版
-   - `LightGuard-v1.0.1-win-arm64.exe` — ARM64 设备
-   - `LightGuard-v1.0.1-win-x86.exe` — 32 位系统
+1. 从 [Releases](https://github.com/snqig/LightGuard/releases) 下载 `LightGuard.exe`
 2. 右键 → **以管理员身份运行**
 3. 首次启动跟随引导选择模式即可
 
@@ -247,35 +258,63 @@ V1.0.1 更新模块新增双重安全校验：
 
 ```
 src/LightGuard/
-├── Core/               # 核心框架
-│   ├── Interfaces/     #   IModule 接口
-│   ├── AppState.cs     #   全局状态单例
-│   ├── ModuleBase.cs   #   模块基类
-│   ├── ModuleManager.cs#   模块管理器
-│   ├── HardwareDetector.cs  # 硬件检测 + 架构识别 + 服务器检测
-│   └── ...             #   配置、调度、错误报告
-├── Firewall/           # 防火墙 ACL 模块
-│   ├── FirewallConst.cs        # 枚举常量、白名单、VPN 网段
-│   ├── FirewallAclRule.cs      # 五元组规则实体（GUID + Unicode）
-│   ├── FirewallAclManager.cs   # COM API 核心管理器
-│   ├── AclPermissionHelper.cs  # NTFS 权限加固
-│   ├── VpnNetworkTool.cs       # VPN 检测 + 代理读取
-│   ├── FirewallPresets.cs      # 4 套预设模板
-│   └── UnicodeTextHelper.cs    # 多语种文本处理
-├── Ransomware/         # 勒索防护引擎（新增）
-│   ├── OfflineVirusDb.cs       # 离线病毒库（200+ 特征）
-│   └── ProcessGuard.cs         # 进程行为沙箱（主动隔离）
-├── Security/           # 安全校验（新增）
-│   └── UpdateSignatureVerifier.cs  # RSA-2048 数字签名验证
-├── Native/             # Win32 API 封装
-├── Modules/            # 六大功能模块实现
-├── UI/                 # 界面层
-│   ├── Pages/          #   8 个功能页面
-│   ├── Controls/       #   自定义控件
-│   ├── MainForm.cs     #   无边框主窗口
-│   └── Theme.cs        #   双主题系统
-├── Program.cs          # 入口
-└── LightGuard.csproj   # 项目文件
+├── Core/                    # 核心框架
+│   ├── Interfaces/IModule.cs       # 模块接口 + 分类枚举
+│   ├── AppState.cs                 # 全局状态单例
+│   ├── ModuleBase.cs               # 模块基类
+│   ├── ModuleManager.cs            # 模块管理器（11个模块注册）
+│   ├── HardwareDetector.cs         # 硬件检测 + 架构识别
+│   ├── AuditLogSystem.cs           # 全局日志审计系统（AES加密）
+│   ├── AuditLogExporter.cs         # CSV/TXT 报表导出
+│   └── ...
+├── Firewall/                # 防火墙 ACL 模块
+│   ├── FirewallAclManager.cs       # COM API 核心管理器
+│   ├── FirewallAclRule.cs          # 五元组规则实体
+│   ├── FirewallPresets.cs          # 4 套预设模板
+│   └── ...
+├── Ransomware/              # 勒索防护引擎
+│   ├── EtwBehaviorMonitor.cs       # ETW 行为监控（落尘原创）
+│   ├── YaraEngine.cs               # YARA 轻量特征核验（落尘原创）
+│   ├── RansomDefenseEngine.cs      # 双层防御协调器（落尘原创）
+│   ├── OfflineVirusDb.cs           # 离线病毒库（200+特征）
+│   └── ProcessGuard.cs             # 进程行为沙箱
+├── Backup/                  # 加密抗勒索备份引擎
+│   ├── BackupCryptoEngine.cs       # AES-256-GCM 加密引擎（落尘原创）
+│   ├── BackupShard.cs              # 分片处理（落尘原创）
+│   ├── BackupManifest.cs           # 备份清单实体
+│   ├── LgBackupFormat.cs           # .lgbackup 私有格式（落尘原创）
+│   ├── BackupExecutor.cs           # 五层粒度备份执行器（落尘原创）
+│   ├── BackupLifecycle.cs          # 自动生命周期管理
+│   └── BackupProgress.cs           # 可视化进度
+├── Recovery/                # 灾难恢复系统
+│   ├── RecoveryEngine.cs           # 解密恢复引擎（落尘原创）
+│   └── RecoveryProgressInfo.cs     # 恢复进度
+├── Database/                # 数据库备份
+│   ├── DatabaseBackupEngine.cs     # 多数据库热备份引擎
+│   └── DatabaseConnectionHelper.cs # 连接辅助
+├── Audit/                   # SMB 文件服务器审计
+│   ├── SmbAuditCollector.cs        # 双采集融合（落尘原创）
+│   └── SmbRiskDetector.cs          # 风险行为识别（落尘原创）
+├── Security/                # 安全校验
+│   └── UpdateSignatureVerifier.cs  # RSA-2048 签名验证
+├── Native/                  # Win32 API 封装
+├── Modules/                 # 十一大功能模块
+│   ├── PrivacyModule.cs            # 隐私加固
+│   ├── CleanupModule.cs            # 广告屏蔽
+│   ├── FirewallModule.cs           # 防火墙
+│   ├── EtwYaraModule.cs            # ETW+YARA 双层防御
+│   ├── RansomwareModule.cs         # 勒索防护（离线库+进程沙箱）
+│   ├── EncryptedBackupModule.cs    # 加密抗勒索备份
+│   ├── DatabaseBackupModule.cs     # 数据库备份
+│   ├── DisasterRecoveryModule.cs   # 灾难恢复
+│   ├── SmbAuditModule.cs           # SMB 文件服务器审计
+│   ├── AuditLogModule.cs           # 全局日志审计
+│   └── UpdateModule.cs             # 自动更新
+├── UI/                      # 界面层
+│   ├── Pages/                      # 功能页面
+│   ├── MainForm.cs                 # 无边框主窗口
+│   └── Theme.cs                    # 双主题系统
+└── Program.cs               # 入口
 ```
 
 ---
@@ -283,34 +322,35 @@ src/LightGuard/
 ## 技术架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│              UI 交互层 (WinForms)                    │
-│   MainForm · 8 Pages · 鼠标优先 · 多语种             │
-├─────────────────────────────────────────────────────┤
-│           模块适配层 (IModule)                       │
-│   Privacy · Cleanup · Firewall · Ransomware         │
-│   Backup · Update                                   │
-├─────────────────────────────────────────────────────┤
-│           安全引擎层 (自研)                          │
-│   离线病毒库 · 进程行为沙箱 · RSA 签名校验           │
-│   VPN 识别 · NTFS/Hosts 联动 · 多语言模板            │
-├─────────────────────────────────────────────────────┤
-│           底层封装层 (COM P/Invoke)                  │
-│   INetFwPolicy2 · DWM/Mica · VSS · 注册表            │
-│   NtSuspendProcess · WMI · RSA/SHA256               │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                   UI 交互层 (WinForms)                        │
+│        MainForm · Pages · 鼠标优先 · 双主题 · 进度可视化      │
+├─────────────────────────────────────────────────────────────┤
+│                模块适配层 (IModule + ModuleBase)              │
+│  Privacy · Cleanup · Firewall · EtwYara · Ransomware        │
+│  EncryptedBackup · DatabaseBackup · DisasterRecovery        │
+│  SmbAudit · AuditLog · Update                               │
+├─────────────────────────────────────────────────────────────┤
+│                安全引擎层（落尘原创）                          │
+│  ETW 行为监控 · YARA 特征核验 · AES-256-GCM 加密分片         │
+│  .lgbackup 抗勒索格式 · SMB 双采集审计 · RSA 签名校验        │
+│  进程行为沙箱 · 离线病毒库 · VSS 卷影保护                    │
+├─────────────────────────────────────────────────────────────┤
+│                底层封装层 (COM / P/Invoke)                    │
+│  INetFwPolicy2 · ETW EventListener · WMI · VSS              │
+│  NtSuspendProcess · AES-GCM · RSA-2048 · SHA-256            │
+│  DWM/Mica · NTFS SACL · EventLog · DNS Cache                │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 技术栈
+### 全链路安全防护闭环
 
-- **C# .NET 8** WinForms + P/Invoke
-- **Windows Firewall COM API** (NetFwTypeLib / INetFwPolicy2)
-- **NTFS ACL** 权限管理 (System.Security.AccessControl)
-- **WMI** 进程监控 (ManagementEventWatcher)
-- **RSA-2048 + SHA-256** 数字签名验证 (System.Security.Cryptography)
-- **NtSuspendProcess** 进程挂起隔离 (ntdll.dll P/Invoke)
-- **自定义 Fluent UI** 渲染引擎 (Mica / 圆角 / 双主题)
-- **JSON** UTF-8 BOM 序列化 (多语言安全)
+```
+ETW 勒索行为监控 → YARA 特征核验 → 防火墙应急断网
+→ VSS 快照保护 → 全粒度加密备份 → AES 内网密文存储
+→ SMB 容灾异地保存 → 自动生命周期清理
+→ 全局日志审计归档 → 加密解密精准恢复 → 裸机灾难整机救援
+```
 
 ---
 
@@ -323,7 +363,7 @@ dotnet restore src/LightGuard/LightGuard.csproj
 # 编译
 dotnet build src/LightGuard/LightGuard.csproj -c Release
 
-# 发布单文件 EXE — x64（默认）
+# 发布单文件 EXE — x64
 dotnet publish src/LightGuard/LightGuard.csproj `
   -c Release -r win-x64 --self-contained true `
   -p:PublishSingleFile=true `
@@ -331,76 +371,93 @@ dotnet publish src/LightGuard/LightGuard.csproj `
   -p:EnableCompressionInSingleFile=true `
   -o ./publish
 
-# 发布单文件 EXE — ARM64
-dotnet publish src/LightGuard/LightGuard.csproj `
-  -c Release -r win-arm64 --self-contained true `
-  -p:PublishSingleFile=true `
-  -o ./publish-arm64
-
-# 发布单文件 EXE — x86
-dotnet publish src/LightGuard/LightGuard.csproj `
-  -c Release -r win-x86 --self-contained true `
-  -p:PublishSingleFile=true `
-  -o ./publish-x86
+# ARM64 / x86 同理替换 -r win-arm64 / -r win-x86
 ```
 
 > 需要 .NET SDK 8.0+ 或 10.0+
 
-### CI/CD 自动构建
+---
 
-GitHub Actions 工作流 (`.github/workflows/cd-release.yml`) 支持：
+## 三期开发规划
 
-- 三架构矩阵构建：`win-x64` / `win-arm64` / `win-x86`
-- 自动发布到 GitHub Releases
-- 每个架构生成独立 EXE + 统一 ZIP 包
+### Phase 1：基础安全与加密底座（已完成）
+
+- RSA 全局文件签名校验框架
+- AES-256-GCM 加密备份底层引擎
+- 离线勒索行为基线规则
+- 全域广告屏蔽基础功能
+- 全架构多平台适配底层框架
+
+### Phase 2：核心全功能版本（当前里程碑）
+
+- ETW 行为监控完整开发，联动 YARA 病毒检测
+- 五层粒度备份引擎开发
+- 数据库冷热备份还原全套功能
+- 备份、还原双端进度可视化 UI
+- 备份生命周期自动清理策略
+- 全局日志检索、报表导出体系
+- 文件服务器 SMB 审计模块全部功能落地
+
+### Phase 3：高级优化与灾难恢复能力完善（规划中）
+
+- PE 裸机整机离线恢复功能
+- 备份版本精细化回溯管理
+- 审计日志远端 NAS 自动归档
+- 风险行为智能告警渠道对接
+- 加解密性能深度优化
+- 文件服务器高并发访问性能调优
 
 ---
 
 ## 版本历史
 
+### v2.0.0 (2026-08-01) — 终极完整版
+
+**落尘原创七大核心模块架构正式定稿：**
+
+- ETW+YARA 双层勒索防御引擎（ETW 行为监控 + YARA 按需特征核验）
+- AES-256-GCM 加密抗勒索备份体系（.lgbackup 私有格式 + 五层粒度 + SMB 容灾）
+- 全链路解密灾难恢复系统（三种恢复模式 + 版本回溯 + 在线预览）
+- 数据库冷热备份模块（SQLite/MySQL/MariaDB/SQL Server/Access 热备份）
+- Windows 文件服务器 SMB 审计模块（NTFS SACL + ETW 双采集 + 风险识别）
+- 全局日志审计报表体系（AES 加密防篡改 + CSV/TXT 导出 + SMB 归档）
+- 备份自动生命周期管理（保留份数/时长清理 + 核心备份锁定）
+
 ### v1.0.1 (2026-08-01)
 
-**安全加固（四项关键缺陷修复）：**
-
-- 新增离线病毒库引擎（`OfflineVirusDb`），内置 200+ 条勒索软件特征，断网环境完整防护
-- 新增进程行为沙箱（`ProcessGuard`），主动监控批量文件操作 + 进程挂起隔离 + 自动断网
-- 新增更新包数字签名校验（`UpdateSignatureVerifier`），RSA-2048 + SHA-256 双重验证
-- 新增多架构支持：x64 / ARM64 / x86 全平台构建，兼容 Server 2019/2022
-
-**防火墙 ACL 模块：**
-
-- 原生 COM 五元组规则管理（INetFwPolicy2）
-- VPN 防绕过：虚拟网卡识别 + CIDR 网段阻断 + 动态监听
-- NTFS 权限加固：EXE 只读锁定 + 批量目录处理
-- 4 套预设模板：Adobe 封锁 / 流氓拦截 / 勒索端口 / 应急断网
-- 多语种 Unicode 兼容（6 语种模板：简/繁中、英、越、印地、阿拉伯）
-
-**UI 改进：**
-
-- UI 鼠标优先交互规范（全下拉/复选/滑块/浏览弹窗）
-- JSON 导入导出 UTF-8 BOM 编码
-- 修复页面导航不触发 OnShown 导致空白
-- 修复模块启动时未初始化
-- 修复窗口缩放内容不自适应
+- 离线病毒库（200+ 特征）、进程行为沙箱、RSA-2048 签名校验、多架构支持
 
 ### v1.0.0 (2026-08-01)
 
-- 初始版本发布
-- 六大模块：隐私加固、流氓净化、防火墙、勒索防护、加密备份、自动更新
-- 双模式 UI：Modern (Mica) / Minimal
-- 智能后台调度
-- 首次运行引导
+- 初始版本：六大模块、双模式 UI、智能后台调度
 
 ---
 
-## License
+## 版权说明
 
-MIT License - 见 [LICENSE](LICENSE)
+**© 2026 落尘（Luochen） 所有权利保留**
+
+LightGuard 整套软件全部核心架构由落尘 2026 年独立原创研发，原创内容包含但不限于：
+
+- ETW+YARA 双层轻量化勒索防御架构
+- 局域网 SMB 私有加密防泄露备份体系、抗勒索私有备份格式 `.lgbackup`
+- 五层粒度 + 数据库一体化备份还原引擎
+- Windows Server 文件共享审计双采集融合架构
+- 内网文件外泄、批量删除等风险行为识别规则
+
+### 版权约束条款
+
+- 禁止拆分核心加密、审计、防御逻辑逆向破解、二次封装商用售卖
+- 开源自用、二次分发场景，必须完整保留全部版权注释，显著标注原开发者：**落尘（Luochen）**
+- 核心算法、架构无作者书面授权，禁止用于同类商业化安全工具开发
+- 所有技术文档、源代码、程序成品著作权归属落尘
 
 ---
 
 <div align="center">
 
 **[下载最新版](https://github.com/snqig/LightGuard/releases)** · **[报告问题](https://github.com/snqig/LightGuard/issues)**
+
+© 2026 落尘（Luochen） 原创开发 · 保留所有权利
 
 </div>

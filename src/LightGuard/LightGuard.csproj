@@ -9,12 +9,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>1.0.1</Version>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
-    <FileVersion>1.0.1.0</FileVersion>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
-    <Description>LightGuard v1.0.1 - 超低资源全能安全防护工具</Description>
+    <Description>LightGuard V2.0 终极完整版 - 落尘原创 Windows 内网安全容灾审计一体化平台</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>

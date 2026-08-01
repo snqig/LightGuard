@@ -40,13 +40,16 @@ public interface IModule : IDisposable
 /// <summary>模块分类</summary>
 public enum ModuleCategory
 {
-    Core,       // 核心系统
-    Privacy,    // 隐私加固
-    Ransomware, // 勒索防护
-    Backup,     // 加密备份
-    Firewall,   // 防火墙
-    Cleanup,    // 流氓净化
-    Update      // 自动更新
+    Core,           // 核心系统
+    Privacy,        // 隐私加固
+    Ransomware,     // 勒索防护 (ETW+YARA 双层防御)
+    Backup,         // 加密抗勒索备份
+    Firewall,       // 防火墙 ACL
+    Cleanup,        // 广告屏蔽净化
+    Update,         // 自动更新
+    Recovery,       // 灾难恢复
+    DatabaseBackup, // 数据库备份
+    Audit           // SMB 文件服务器审计
 }
 
 /// <summary>模块运行状态</summary>

@@ -23,12 +23,24 @@ public sealed class ModuleManager : IDisposable
         _initialized = true;
         this.appState = appState;
 
-        // 按依赖顺序注册
+        // 按依赖顺序注册 — 落尘原创七大核心模块架构
+        // 第一层：基础防护
         Register(new Modules.PrivacyModule(appState));
         Register(new Modules.CleanupModule(appState));
         Register(new Modules.FirewallModule(appState));
-        Register(new Modules.BackupModule(appState));
+
+        // 第二层：勒索防御（ETW+YARA 双层 + 离线病毒库 + 进程行为沙箱）
+        Register(new Modules.EtwYaraModule(appState));
         Register(new Modules.RansomwareModule(appState));
+
+        // 第三层：加密容灾（五层粒度备份 + 灾难恢复 + 数据库备份）
+        Register(new Modules.EncryptedBackupModule(appState));
+        Register(new Modules.DatabaseBackupModule(appState));
+        Register(new Modules.DisasterRecoveryModule(appState));
+
+        // 第四层：审计与更新
+        Register(new Modules.SmbAuditModule(appState));
+        Register(new Modules.AuditLogModule(appState));
         Register(new Modules.UpdateModule(appState));
     }
 
