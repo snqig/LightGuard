@@ -9,12 +9,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>2.0.0</Version>
-    <AssemblyVersion>2.0.0.0</AssemblyVersion>
-    <FileVersion>2.0.0.0</FileVersion>
+    <Version>3.0.0</Version>
+    <AssemblyVersion>3.0.0.0</AssemblyVersion>
+    <FileVersion>3.0.0.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
-    <Description>LightGuard V2.0 终极完整版 - 落尘原创 Windows 内网安全容灾审计一体化平台</Description>
+    <Copyright>© 2026 落尘（Luochen）保留所有权利</Copyright>
+    <Description>LightGuard V3.0 全栈安全容灾审计系统 - 勒索解密+Defender查杀+多语言+五层防护闭环</Description>
+    <NeutralLanguage>zh-CN</NeutralLanguage>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
@@ -29,6 +31,24 @@
     <None Update="assets\lightguard.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Decryption\DecryptionToolIndex.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Resources\lang\lang_zh-CN.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\lang\lang_en-US.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\lang\lang_zh-TW.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

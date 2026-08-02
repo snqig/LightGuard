@@ -208,6 +208,8 @@ public class MainForm : Form
             ("流氓净化", "🧹", "cleanup"),
             ("防火墙", "🌐", "firewall"),
             ("勒索防护", "🦠", "ransomware"),
+            ("勒索解密", "🔓", "decrypt"),
+            ("Defender查杀", "🛡", "defender"),
             ("加密备份", "💾", "backup"),
             ("文件审计", "📁", "audit"),
             ("自动更新", "🔄", "update"),
@@ -293,6 +295,8 @@ public class MainForm : Form
         _pages["cleanup"] = new CleanupPage(_appState);
         _pages["firewall"] = new FirewallPage(_appState);
         _pages["ransomware"] = new RansomwarePage(_appState);
+        _pages["decrypt"] = new DecryptionPage(_appState);
+        _pages["defender"] = new DefenderScanPage(_appState);
         _pages["backup"] = new BackupPage(_appState);
         _pages["audit"] = new FileServerAuditPage(_appState);
         _pages["update"] = new UpdatePage(_appState);

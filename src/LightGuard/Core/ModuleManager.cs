@@ -39,6 +39,12 @@ public sealed class ModuleManager : IDisposable
         Register(new Modules.EtwYaraModule(appState));
         Register(new Modules.RansomwareModule(appState));
 
+        // 第二层附加：勒索解密（家族识别 + 官方解密工具调度）
+        Register(new Modules.RansomwareDecryptionModule(appState));
+
+        // 第二层附加：Defender 查杀调度（MpCmdRun 按需扫描 + 病毒库更新）
+        Register(new Modules.DefenderScanModule(appState));
+
         // 第三层：加密容灾（五层粒度备份 + 灾难恢复 + 数据库备份）
         Register(new Modules.EncryptedBackupModule(appState));
         Register(new Modules.DatabaseBackupModule(appState));

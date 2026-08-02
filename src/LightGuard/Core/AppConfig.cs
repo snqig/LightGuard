@@ -45,6 +45,12 @@ public sealed class AppConfig
     /// <summary>配置版本号</summary>
     public int ConfigVersion { get; set; } = 1;
 
+    /// <summary>界面语言（ZhCN/EnUS/ZhTW）</summary>
+    public string Language { get; set; } = "ZhCN";
+
+    /// <summary>是否启用服务器模式（强制英文审计日志，精简UI）</summary>
+    public bool ServerLogMode { get; set; } = false;
+
     public bool IsModuleEnabled(string moduleId)
     {
         return ModuleEnabled.TryGetValue(moduleId, out var enabled) ? enabled : true;
