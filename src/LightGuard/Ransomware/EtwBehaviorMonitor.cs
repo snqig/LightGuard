@@ -208,7 +208,23 @@ public sealed class EtwBehaviorMonitor : IDisposable
 
             // 尝试从 payload 中提取文件路径和进程信息
             string? filePath = null;
-            int processId = eventData.ActivityId != default ? 0 : 0;
+            // 修复：通过 PayloadNames 精确定位 ProcessId 字段，替代恒为 0 的占位逻辑
+            int processId = 0;
+            var payloadNames = eventData.PayloadNames;
+            if (payloadNames != null)
+            {
+                for (int i = 0; i < payloadNames.Count && i < payload.Count; i++)
+                {
+                    if (string.Equals(payloadNames[i], "ProcessId", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (int.TryParse(payload[i]?.ToString(), out var pid) && pid > 0)
+                        {
+                            processId = pid;
+                            break;
+                        }
+                    }
+                }
+            }
 
             foreach (var item in payload)
             {

@@ -254,27 +254,86 @@ public sealed class RansomDefenseEngine : IDisposable
     }
 
     /// <summary>
-    /// 锁定 VSS 备份 — 临时禁止 VSS 卷影副本删除
+    /// 锁定 VSS 备份 — 创建应急快照并记录现有卷影副本，阻止勒索病毒清空 VSS
     /// </summary>
     private static void LockVssBackups()
     {
         try
         {
-            // 通过修改 vssadmin 权限来阻止删除操作
-            var psi = new ProcessStartInfo
+            // 1. 记录当前所有 VSS 卷影副本 ID（用于后续检测是否被删除）
+            var existingShadows = new List<string>();
+            var listPsi = new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = "/c vssadmin list shadows > nul 2>&1",
+                Arguments = "/c vssadmin list shadows",
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                Verb = "runas"
+                RedirectStandardOutput = true
             };
+            using (var listProc = Process.Start(listPsi))
+            {
+                if (listProc != null)
+                {
+                    var output = listProc.StandardOutput.ReadToEnd();
+                    listProc.WaitForExit(5000);
+                    foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var trimmed = line.Trim();
+                        if (trimmed.Contains("Shadow Copy ID:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            existingShadows.Add(trimmed);
+                        }
+                    }
+                }
+            }
 
-            // 记录当前 VSS 状态
-            using var proc = Process.Start(psi);
-            proc?.WaitForExit(5000);
+            // 2. 为所有固定卷创建应急 VSS 快照（勒索病毒攻击前的保命快照）
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                if (drive.DriveType != DriveType.Fixed || !drive.IsReady) continue;
+                var volume = drive.Name[0]; // 取盘符首字母
+                try
+                {
+                    var snapPsi = new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = $"/c vssadmin create shadow /for={volume}: 2>&1",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true
+                    };
+                    using var snapProc = Process.Start(snapPsi);
+                    snapProc?.WaitForExit(10000);
+                }
+                catch { }
+            }
 
-            ErrorReporter.Log("[RansomDefenseEngine] VSS 备份已锁定（记录当前状态）");
+            // 3. 通过 NTFS 权限临时限制 vssadmin.exe 和 wmic.exe 的执行（阻止勒索病毒调用）
+            foreach (var exeName in new[] { "vssadmin.exe", "wmic.exe" })
+            {
+                var exePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), exeName);
+                if (!File.Exists(exePath)) continue;
+                try
+                {
+                    // 移除普通用户执行权限，仅保留 SYSTEM 和 Administrators
+                    var icaclsPsi = new ProcessStartInfo
+                    {
+                        FileName = "icacls.exe",
+                        Arguments = $"\"{exePath}\" /inheritance:r /grant:r \"SYSTEM:(RX)\" \"Administrators:(RX)\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true
+                    };
+                    using var icaclsProc = Process.Start(icaclsPsi);
+                    icaclsProc?.WaitForExit(5000);
+                }
+                catch { }
+            }
+
+            ErrorReporter.Log($"[RansomDefenseEngine] VSS 应急保护已启动：记录 {existingShadows.Count} 个现有快照，已创建应急快照，已限制 vssadmin/wmic 执行权限");
+            AuditLogSystem.Log(LogLevel.Critical, LogCategory.System,
+                "VSS 应急保护已启动",
+                $"现有卷影副本 {existingShadows.Count} 个，已创建应急快照并限制 vssadmin/wmic 权限");
         }
         catch (Exception ex)
         {
@@ -340,6 +399,11 @@ public sealed class RansomDefenseEngine : IDisposable
     /// 获取 ETW 行为监控器实例
     /// </summary>
     public EtwBehaviorMonitor GetEtwMonitor() => _etwMonitor;
+
+    /// <summary>
+    /// 获取 ProcessGuard 实例（供 RansomwareModule 共享，避免重复实例化）
+    /// </summary>
+    public ProcessGuard GetProcessGuard() => _processGuard;
 
     #endregion
 

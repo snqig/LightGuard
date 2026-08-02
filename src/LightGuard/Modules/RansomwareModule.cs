@@ -162,11 +162,15 @@ public sealed class RansomwareModule : ModuleBase
         LoadOfflineVirusDb();
         // 再合并本地已下载的在线病毒库（如有）
         MergeVirusDb();
-        // 初始化进程行为沙箱
-        _processGuard = new ProcessGuard();
+
+        // 复用 EtwYaraModule 的 ProcessGuard 实例，避免重复监控和重复挂起
+        var etwModule = AppState.Modules.GetModule("etw-yara-defense") as EtwYaraModule;
+        var sharedGuard = etwModule?.GetDefenseEngine()?.GetProcessGuard();
+        _processGuard = sharedGuard ?? new ProcessGuard();
         _processGuard.SuspiciousProcessDetected += OnSuspiciousProcessDetected;
         _processGuard.ProcessQuarantined += OnProcessQuarantined;
-        Log($"勒索防护模块初始化完成 | 离线库 {OfflineVirusDb.GetTotalCount()} 条 | 在线库 {_signatures.Count} 条");
+
+        Log($"勒索防护模块初始化完成 | 离线库 {OfflineVirusDb.GetTotalCount()} 条 | 在线库 {_signatures.Count} 条 | ProcessGuard {(sharedGuard != null ? "共享" : "独立")}实例");
         await Task.CompletedTask;
     }
 
@@ -202,7 +206,13 @@ public sealed class RansomwareModule : ModuleBase
     {
         StopRealtimeMonitor();
         StopIdleScan();
-        _processGuard?.Dispose();
+        // 仅释放独立创建的 ProcessGuard；共享实例由 EtwYaraModule 负责释放
+        var etwModule = AppState.Modules.GetModule("etw-yara-defense") as EtwYaraModule;
+        var sharedGuard = etwModule?.GetDefenseEngine()?.GetProcessGuard();
+        if (_processGuard != null && _processGuard != sharedGuard)
+        {
+            _processGuard.Dispose();
+        }
         _httpClient.Dispose();
     }
 

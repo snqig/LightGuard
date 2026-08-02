@@ -24,10 +24,16 @@ public sealed class ModuleManager : IDisposable
         this.appState = appState;
 
         // 按依赖顺序注册 — 落尘原创七大核心模块架构
+        // 第零层：程序自我保护（反调试+DACL+配置加密，必须在所有模块之前启动）
+        Register(new Modules.SelfProtectionModule(appState));
+
         // 第一层：基础防护
         Register(new Modules.PrivacyModule(appState));
         Register(new Modules.CleanupModule(appState));
         Register(new Modules.FirewallModule(appState));
+
+        // 第一层附加：系统守护（隔离区+快照回滚+防火墙规则守护，依赖 FirewallModule）
+        Register(new Modules.SystemGuardModule(appState));
 
         // 第二层：勒索防御（ETW+YARA 双层 + 离线病毒库 + 进程行为沙箱）
         Register(new Modules.EtwYaraModule(appState));
