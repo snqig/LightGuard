@@ -51,7 +51,10 @@ public class BackupPage : Page
     private ComboBox? _recoveryModeCombo;
     private TextBox? _recoveryPasswordBox;
     private TextBox? _recoveryDestBox;
+    private TextBox? _recoveryFileBox;
     private AccentButton? _browseRecoveryDestBtn;
+    private AccentButton? _browseBackupFileBtn;
+    private AccentButton? _confirmRestoreBtn;
     private Panel? _recoveryProgressBar;
     private Label? _recoveryProgressLabel;
     private Label? _recoveryProgressDetail;
@@ -75,6 +78,12 @@ public class BackupPage : Page
 
     // 状态
     private bool _isBusy;
+
+    /// <summary>跨标签页传递的待恢复文件路径（从备份列表点击"恢复"时设置）</summary>
+    private string? _pendingRestoreFile;
+
+    /// <summary>跨标签页传递的恢复目标目录（与 _pendingRestoreFile 配合使用）</summary>
+    private string? _pendingRestoreDest;
 
     public BackupPage(AppState appState) : base(appState,
         "加密备份与灾难恢复",
@@ -367,81 +376,145 @@ public class BackupPage : Page
 
         y += 80;
 
-        // ===== 已有加密备份列表 =====
-        CreateSectionTitle("加密备份列表 (.lgbackup)", 0, y);
+        // ===== 已有加密备份列表（扫描多目录：目标目录 + 桌面 + 文档） =====
+        CreateSectionTitle("加密备份列表 (.lgbackup)  —  自动扫描: 备份目标 / 桌面 / 文档", 0, y);
         y += 30;
 
         try
         {
+            // 扫描多个目录
+            var searchDirs = new List<string>();
             var destDir = _encBackupModule?.DestinationDirectory ?? "";
-            if (_encBackupModule?.Lifecycle != null && Directory.Exists(destDir))
+            if (!string.IsNullOrEmpty(destDir) && Directory.Exists(destDir))
+                searchDirs.Add(destDir);
+
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            if (!string.IsNullOrEmpty(desktop) && Directory.Exists(desktop) && !searchDirs.Contains(desktop))
+                searchDirs.Add(desktop);
+
+            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            if (!string.IsNullOrEmpty(documents) && Directory.Exists(documents) && !searchDirs.Contains(documents))
+                searchDirs.Add(documents);
+
+            var backupFiles = new List<string>();
+            foreach (var dir in searchDirs)
             {
-                var history = _encBackupModule.Lifecycle.GetBackupHistory(destDir);
-                if (history.Count == 0)
+                try
                 {
-                    var empty = new Label
+                    foreach (var f in Directory.EnumerateFiles(dir, "*.lgbackup"))
                     {
-                        Text = "暂无加密备份记录",
-                        Font = Theme.BodyFont,
-                        ForeColor = Theme.TextTertiary,
-                        Location = new Point(16, 0),
-                        Size = new Size(cw - 32, 24),
+                        if (!backupFiles.Contains(f))
+                            backupFiles.Add(f);
+                    }
+                }
+                catch { }
+            }
+
+            if (backupFiles.Count == 0)
+            {
+                var empty = new Label
+                {
+                    Text = "暂无加密备份记录 — 可在上方创建新备份，或在\"灾难恢复\"标签页手动选择 .lgbackup 文件",
+                    Font = Theme.BodyFont,
+                    ForeColor = Theme.TextTertiary,
+                    Location = new Point(16, 0),
+                    Size = new Size(cw - 32, 24),
+                    BackColor = Color.Transparent
+                };
+                ScrollContent.Controls.Add(empty);
+                y += 30;
+            }
+            else
+            {
+                // 表头
+                var headerCard = CreateCard(0, y, cw, 28);
+                var headers = new[] { "文件名", "位置", "类型", "时间", "大小", "算法", "操作" };
+                var xPos = new[] { 8, 250, 380, 450, 560, 650, 740 };
+                var widths = new[] { 238, 126, 66, 106, 86, 84, 100 };
+                for (int i = 0; i < headers.Length; i++)
+                {
+                    var h = new Label
+                    {
+                        Text = headers[i],
+                        Font = Theme.SmallFont,
+                        ForeColor = Theme.TextSecondary,
+                        Location = new Point(xPos[i], 4),
+                        Size = new Size(widths[i], 20),
                         BackColor = Color.Transparent
                     };
-                    ScrollContent.Controls.Add(empty);
-                    y += 30;
+                    headerCard.Controls.Add(h);
                 }
-                else
+                y += 34;
+
+                foreach (var file in backupFiles)
                 {
-                    // 表头
-                    var headerCard = CreateCard(0, y, cw, 28);
-                    var headers = new[] { "类型", "时间", "算法", "大小", "分片", "锁定", "策略" };
-                    var xPos = new[] { 8, 90, 250, 390, 470, 540, 600 };
-                    var widths = new[] { 78, 156, 136, 76, 66, 56, 80 };
-                    for (int i = 0; i < headers.Length; i++)
+                    BackupManifest? manifest = null;
+                    try
                     {
-                        var h = new Label
+                        var (m, _, _) = LgBackupFormat.ReadManifestOnly(file);
+                        manifest = m;
+                    }
+                    catch { }
+
+                    var itemCard = CreateCard(0, y, cw, 30);
+
+                    var fileName = Path.GetFileName(file);
+                    var dirName = Path.GetDirectoryName(file) ?? "";
+                    var dirDisplay = TruncateText(dirName, 18);
+                    var fileSize = new FileInfo(file).Length;
+                    var vals = new[]
+                    {
+                        TruncateText(fileName, 30),
+                        dirDisplay,
+                        manifest != null ? GetBackupTypeName(manifest.BackupType) : "-",
+                        manifest?.BackupTime.ToString("MM-dd HH:mm") ?? "-",
+                        $"{fileSize / 1024.0:F1} KB",
+                        manifest?.EncryptedAlgorithm ?? "-"
+                    };
+                    for (int i = 0; i < vals.Length; i++)
+                    {
+                        var v = new Label
                         {
-                            Text = headers[i],
+                            Text = vals[i],
                             Font = Theme.SmallFont,
                             ForeColor = Theme.TextSecondary,
-                            Location = new Point(xPos[i], 4),
+                            Location = new Point(xPos[i], 5),
                             Size = new Size(widths[i], 20),
                             BackColor = Color.Transparent
                         };
-                        headerCard.Controls.Add(h);
+                        itemCard.Controls.Add(v);
                     }
-                    y += 34;
 
-                    foreach (var m in history)
+                    // 恢复按钮 — 跳转到恢复标签页并预填充文件路径
+                    var restoreBtn = new AccentButton
                     {
-                        var itemCard = CreateCard(0, y, cw, 26);
-                        var isInc = m.Metadata?.TryGetValue("Strategy", out var s) == true && s == "Incremental";
-                        var vals = new[]
-                        {
-                            GetBackupTypeName(m.BackupType),
-                            m.BackupTime.ToString("yyyy-MM-dd HH:mm"),
-                            m.EncryptedAlgorithm,
-                            $"{m.TotalSize / 1024.0:F1} KB",
-                            m.ShardCount.ToString(),
-                            m.IsLocked ? "已锁定" : "-",
-                            isInc ? "增量" : "全量"
-                        };
-                        for (int i = 0; i < vals.Length; i++)
-                        {
-                            var v = new Label
-                            {
-                                Text = vals[i],
-                                Font = Theme.SmallFont,
-                                ForeColor = i == 5 && m.IsLocked ? Theme.Warning : Theme.TextSecondary,
-                                Location = new Point(xPos[i], 3),
-                                Size = new Size(widths[i], 20),
-                                BackColor = Color.Transparent
-                            };
-                            itemCard.Controls.Add(v);
-                        }
-                        y += 30;
-                    }
+                        Text = "恢复",
+                        Location = new Point(xPos[6], 1),
+                        Size = new Size(46, 26)
+                    };
+                    var filePath = file;
+                    restoreBtn.Click += () =>
+                    {
+                        _pendingRestoreFile = filePath;
+                        _pendingRestoreDest = Path.Combine(
+                            Path.GetDirectoryName(filePath) ?? "", "Restored");
+                        _activeTab = 1; // 切换到灾难恢复标签页
+                        BuildContent();
+                    };
+                    itemCard.Controls.Add(restoreBtn);
+
+                    // 预览按钮
+                    var previewBtn = new AccentButton
+                    {
+                        Text = "预览",
+                        Location = new Point(xPos[6] + 50, 1),
+                        Size = new Size(46, 26)
+                    };
+                    var fp = file;
+                    previewBtn.Click += () => PreviewBackup(fp);
+                    itemCard.Controls.Add(previewBtn);
+
+                    y += 34;
                 }
             }
         }
@@ -636,10 +709,66 @@ public class BackupPage : Page
     {
         int cw = ContentWidth;
 
+        CreateSectionTitle("选择备份文件", 0, y);
+        y += 30;
+
+        // ===== 备份文件选择卡片 =====
+        var fileCard = CreateCard(0, y, cw, 60);
+
+        var fileLabel = new Label
+        {
+            Text = "备份文件：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(16, 14),
+            Size = new Size(80, 22),
+            BackColor = Color.Transparent
+        };
+        fileCard.Controls.Add(fileLabel);
+
+        _recoveryFileBox = new TextBox
+        {
+            Location = new Point(100, 12),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "选择 .lgbackup 加密备份文件，或在下方列表中点击"
+        };
+        fileCard.Controls.Add(_recoveryFileBox);
+
+        // 如果从备份列表点击"恢复"跳转过来，预填充文件路径
+        if (!string.IsNullOrEmpty(_pendingRestoreFile))
+        {
+            _recoveryFileBox.Text = _pendingRestoreFile;
+            // 自动填充恢复目标为备份文件所在目录下的 Restored 子目录
+            if (string.IsNullOrEmpty(_recoveryDestBox?.Text))
+            {
+                var restoreDir = Path.Combine(
+                    Path.GetDirectoryName(_pendingRestoreFile) ?? "", "Restored");
+                // _recoveryDestBox 尚未创建，稍后创建时再填充
+                _pendingRestoreDest = restoreDir;
+            }
+            _pendingRestoreFile = null; // 清除标记
+        }
+
+        _browseBackupFileBtn = new AccentButton
+        {
+            Text = "浏览选择文件...",
+            Location = new Point(cw - 168, 8),
+            Size = new Size(140, 32)
+        };
+        _browseBackupFileBtn.Click += BrowseBackupFile;
+        fileCard.Controls.Add(_browseBackupFileBtn);
+
+        y += 70;
+
+        // ===== 恢复配置卡片 =====
         CreateSectionTitle("恢复配置", 0, y);
         y += 30;
 
-        var configCard = CreateCard(0, y, cw, 130);
+        var configCard = CreateCard(0, y, cw, 150);
 
         // 恢复模式
         var modeLabel = new Label
@@ -695,7 +824,7 @@ public class BackupPage : Page
         };
         configCard.Controls.Add(_recoveryPasswordBox);
 
-        // 目标目录
+        // 恢复目标目录
         var destLabel = new Label
         {
             Text = "恢复目标：",
@@ -715,9 +844,16 @@ public class BackupPage : Page
             BackColor = Theme.CardBg,
             ForeColor = Theme.TextPrimary,
             BorderStyle = BorderStyle.FixedSingle,
-            PlaceholderText = "恢复目标目录"
+            PlaceholderText = "选择恢复目标目录（留空则恢复到原始路径）"
         };
         configCard.Controls.Add(_recoveryDestBox);
+
+        // 如果有跨标签页传递的恢复目标，预填充
+        if (!string.IsNullOrEmpty(_pendingRestoreDest))
+        {
+            _recoveryDestBox.Text = _pendingRestoreDest;
+            _pendingRestoreDest = null;
+        }
 
         _browseRecoveryDestBtn = new AccentButton
         {
@@ -737,19 +873,29 @@ public class BackupPage : Page
         };
         configCard.Controls.Add(_browseRecoveryDestBtn);
 
+        // 确认恢复按钮
+        _confirmRestoreBtn = new AccentButton
+        {
+            Text = "确认恢复",
+            Location = new Point(16, 112),
+            Size = new Size(160, 32)
+        };
+        _confirmRestoreBtn.Click += ConfirmRestore;
+        configCard.Controls.Add(_confirmRestoreBtn);
+
         // 提示
         var hintLabel = new Label
         {
-            Text = "提示：恢复流程为固定不可跳过 — 读取备份包 → 输入密钥 → 解密校验 → SHA256完整性校验 → 空间检测 → 按模式恢复",
+            Text = "流程：选择备份文件 → 输入解密密码 → 选择恢复目标和模式 → 点击确认恢复",
             Font = Theme.SmallFont,
             ForeColor = Theme.TextTertiary,
-            Location = new Point(16, 108),
-            Size = new Size(cw - 32, 18),
+            Location = new Point(190, 118),
+            Size = new Size(cw - 210, 18),
             BackColor = Color.Transparent
         };
         configCard.Controls.Add(hintLabel);
 
-        y += 140;
+        y += 160;
 
         // ===== 恢复进度 =====
         CreateSectionTitle("恢复进度", 0, y);
@@ -780,110 +926,149 @@ public class BackupPage : Page
 
         y += 80;
 
-        // ===== 可恢复备份列表 =====
+        // ===== 可恢复备份列表（扫描多个目录） =====
         CreateSectionTitle("可恢复备份列表", 0, y);
         y += 30;
 
         try
         {
-            var destDir = _recoveryModule?.DefaultBackupDirectory ?? "";
-            if (Directory.Exists(destDir))
+            // 扫描多个目录：默认备份目录 + 桌面 + 用户文档
+            var searchDirs = new List<string>();
+            var defaultDir = _recoveryModule?.DefaultBackupDirectory ?? "";
+            if (!string.IsNullOrEmpty(defaultDir) && Directory.Exists(defaultDir))
+                searchDirs.Add(defaultDir);
+
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            if (!string.IsNullOrEmpty(desktop) && Directory.Exists(desktop) && !searchDirs.Contains(desktop))
+                searchDirs.Add(desktop);
+
+            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            if (!string.IsNullOrEmpty(documents) && Directory.Exists(documents) && !searchDirs.Contains(documents))
+                searchDirs.Add(documents);
+
+            var backupFiles = new List<string>();
+            foreach (var dir in searchDirs)
             {
-                var backupFiles = Directory.EnumerateFiles(destDir, "*.lgbackup").ToList();
-                if (backupFiles.Count == 0)
+                try
                 {
-                    var empty = new Label
+                    foreach (var f in Directory.EnumerateFiles(dir, "*.lgbackup"))
                     {
-                        Text = "暂无可恢复的加密备份",
-                        Font = Theme.BodyFont,
-                        ForeColor = Theme.TextTertiary,
-                        Location = new Point(16, 0),
-                        Size = new Size(cw - 32, 24),
+                        if (!backupFiles.Contains(f))
+                            backupFiles.Add(f);
+                    }
+                }
+                catch { }
+            }
+
+            if (backupFiles.Count == 0)
+            {
+                var empty = new Label
+                {
+                    Text = "暂无可恢复的加密备份 — 请点击上方\"浏览选择文件...\"手动选择 .lgbackup 文件",
+                    Font = Theme.BodyFont,
+                    ForeColor = Theme.TextTertiary,
+                    Location = new Point(16, 0),
+                    Size = new Size(cw - 32, 24),
+                    BackColor = Color.Transparent
+                };
+                ScrollContent.Controls.Add(empty);
+                y += 30;
+            }
+            else
+            {
+                // 表头
+                var headerCard = CreateCard(0, y, cw, 28);
+                var headers = new[] { "文件名", "位置", "类型", "时间", "大小", "操作" };
+                var xPos = new[] { 8, 250, 380, 450, 560, 660 };
+                var widths = new[] { 238, 126, 66, 106, 96, 100 };
+                for (int i = 0; i < headers.Length; i++)
+                {
+                    var h = new Label
+                    {
+                        Text = headers[i],
+                        Font = Theme.SmallFont,
+                        ForeColor = Theme.TextSecondary,
+                        Location = new Point(xPos[i], 4),
+                        Size = new Size(widths[i], 20),
                         BackColor = Color.Transparent
                     };
-                    ScrollContent.Controls.Add(empty);
-                    y += 30;
+                    headerCard.Controls.Add(h);
                 }
-                else
+                y += 34;
+
+                foreach (var file in backupFiles)
                 {
-                    // 表头
-                    var headerCard = CreateCard(0, y, cw, 28);
-                    var headers = new[] { "文件名", "类型", "时间", "大小", "操作" };
-                    var xPos = new[] { 8, 260, 330, 470, 570 };
-                    var widths = new[] { 248, 66, 136, 96, 120 };
-                    for (int i = 0; i < headers.Length; i++)
+                    BackupManifest? preview = null;
+                    try
                     {
-                        var h = new Label
+                        var (m, _, _) = LgBackupFormat.ReadManifestOnly(file);
+                        preview = m;
+                    }
+                    catch { }
+
+                    var itemCard = CreateCard(0, y, cw, 30);
+
+                    var fileName = Path.GetFileName(file);
+                    var dirName = Path.GetDirectoryName(file) ?? "";
+                    var dirDisplay = TruncateText(dirName, 18);
+                    var vals = new[]
+                    {
+                        TruncateText(fileName, 30),
+                        dirDisplay,
+                        preview != null ? GetBackupTypeName(preview.BackupType) : "-",
+                        preview?.BackupTime.ToString("MM-dd HH:mm") ?? "-",
+                        $"{new FileInfo(file).Length / 1024.0:F1} KB"
+                    };
+                    for (int i = 0; i < vals.Length; i++)
+                    {
+                        var v = new Label
                         {
-                            Text = headers[i],
+                            Text = vals[i],
                             Font = Theme.SmallFont,
                             ForeColor = Theme.TextSecondary,
-                            Location = new Point(xPos[i], 4),
+                            Location = new Point(xPos[i], 5),
                             Size = new Size(widths[i], 20),
                             BackColor = Color.Transparent
                         };
-                        headerCard.Controls.Add(h);
+                        itemCard.Controls.Add(v);
                     }
-                    y += 34;
 
-                    foreach (var file in backupFiles)
+                    // 选择此文件按钮（填入文件路径框）
+                    var selectBtn = new AccentButton
                     {
-                        BackupManifest? preview = null;
-                        try
+                        Text = "选择",
+                        Location = new Point(xPos[5], 1),
+                        Size = new Size(46, 26)
+                    };
+                    var filePath = file;
+                    selectBtn.Click += () =>
+                    {
+                        if (_recoveryFileBox != null)
                         {
-                            var (m, _, _) = LgBackupFormat.ReadManifestOnly(file);
-                            preview = m;
-                        }
-                        catch { }
-
-                        var itemCard = CreateCard(0, y, cw, 30);
-
-                        var fileName = Path.GetFileName(file);
-                        var vals = new[]
-                        {
-                            TruncateText(fileName, 32),
-                            preview != null ? GetBackupTypeName(preview.BackupType) : "-",
-                            preview?.BackupTime.ToString("yyyy-MM-dd HH:mm") ?? "-",
-                            $"{new FileInfo(file).Length / 1024.0:F1} KB"
-                        };
-                        for (int i = 0; i < vals.Length; i++)
-                        {
-                            var v = new Label
+                            _recoveryFileBox.Text = filePath;
+                            // 自动填充恢复目标为备份文件所在目录下的 Restored 子目录
+                            if (string.IsNullOrEmpty(_recoveryDestBox?.Text))
                             {
-                                Text = vals[i],
-                                Font = Theme.SmallFont,
-                                ForeColor = Theme.TextSecondary,
-                                Location = new Point(xPos[i], 5),
-                                Size = new Size(widths[i], 20),
-                                BackColor = Color.Transparent
-                            };
-                            itemCard.Controls.Add(v);
+                                var restoreDir = Path.Combine(Path.GetDirectoryName(filePath) ?? "", "Restored");
+                                if (_recoveryDestBox != null)
+                                    _recoveryDestBox.Text = restoreDir;
+                            }
                         }
+                    };
+                    itemCard.Controls.Add(selectBtn);
 
-                        // 恢复按钮
-                        var restoreBtn = new AccentButton
-                        {
-                            Text = "恢复",
-                            Location = new Point(xPos[4], 1),
-                            Size = new Size(60, 26)
-                        };
-                        var filePath = file;
-                        restoreBtn.Click += () => StartRestore(filePath);
-                        itemCard.Controls.Add(restoreBtn);
+                    // 预览按钮
+                    var previewBtn = new AccentButton
+                    {
+                        Text = "预览",
+                        Location = new Point(xPos[5] + 50, 1),
+                        Size = new Size(46, 26)
+                    };
+                    var fp = file;
+                    previewBtn.Click += () => PreviewBackup(fp);
+                    itemCard.Controls.Add(previewBtn);
 
-                        // 预览按钮
-                        var previewBtn = new AccentButton
-                        {
-                            Text = "预览",
-                            Location = new Point(xPos[4] + 66, 1),
-                            Size = new Size(50, 26)
-                        };
-                        var fp = file;
-                        previewBtn.Click += () => PreviewBackup(fp);
-                        itemCard.Controls.Add(previewBtn);
-
-                        y += 34;
-                    }
+                    y += 34;
                 }
             }
         }
@@ -892,7 +1077,60 @@ public class BackupPage : Page
         y += 20;
     }
 
+    /// <summary>浏览选择 .lgbackup 备份文件</summary>
+    private void BrowseBackupFile()
+    {
+        try
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title = "选择加密备份文件",
+                Filter = "加密备份文件 (*.lgbackup)|*.lgbackup|所有文件 (*.*)|*.*",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+            };
+            if (dlg.ShowDialog() == DialogResult.OK && _recoveryFileBox != null)
+            {
+                _recoveryFileBox.Text = dlg.FileName;
+                // 自动填充恢复目标为备份文件所在目录下的 Restored 子目录
+                if (string.IsNullOrEmpty(_recoveryDestBox?.Text) && _recoveryDestBox != null)
+                {
+                    var restoreDir = Path.Combine(Path.GetDirectoryName(dlg.FileName) ?? "", "Restored");
+                    _recoveryDestBox.Text = restoreDir;
+                }
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>确认恢复 — 从文件选择框获取路径并执行恢复</summary>
+    private async void ConfirmRestore()
+    {
+        var backupPath = _recoveryFileBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(backupPath))
+        {
+            MessageBoxHelper.Warn("请先选择要恢复的 .lgbackup 备份文件。\n可点击\"浏览选择文件...\"或在下方列表中点击\"选择\"。");
+            return;
+        }
+        if (!File.Exists(backupPath))
+        {
+            MessageBoxHelper.Error($"备份文件不存在：{backupPath}");
+            return;
+        }
+
+        await StartRestoreAsync(backupPath);
+    }
+
+    /// <summary>从列表中直接恢复指定文件</summary>
     private async void StartRestore(string backupPath)
+    {
+        // 填入文件选择框
+        if (_recoveryFileBox != null)
+            _recoveryFileBox.Text = backupPath;
+
+        await StartRestoreAsync(backupPath);
+    }
+
+    private async Task StartRestoreAsync(string backupPath)
     {
         if (_isBusy || _recoveryModule?.Engine == null) return;
 
