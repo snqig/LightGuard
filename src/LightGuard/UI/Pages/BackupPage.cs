@@ -28,9 +28,59 @@ public class BackupPage : Page
     private DatabaseBackupModule? _dbBackupModule;
 
     // 标签页
-    private int _activeTab; // 0=备份 1=恢复 2=数据库 3=生命周期
-    private readonly string[] _tabNames = { "加密备份", "灾难恢复", "数据库备份", "生命周期" };
+    private int _activeTab; // 0=备份 1=恢复 2=数据库 3=生命周期 4=企业容灾 5=快照审计
+    private readonly string[] _tabNames = { "加密备份", "灾难恢复", "数据库备份", "生命周期", "企业容灾", "快照审计" };
     private List<Panel> _tabButtons = new();
+
+    // 企业容灾引擎引用
+    private VssShadowCopyEngine? _vssEngine;
+    private RansomwareProofBackupPool? _backupPool;
+    private BackupHealthVerifier _healthVerifier = new();
+    private ResumableBackupEngine _resumableEngine = new();
+    private SmartFilterEngine _filterEngine = new();
+
+    // 快照链与审计引擎引用
+    private SnapshotChainManager _chainManager = new(AppState.Instance);
+    private BackupAuditReporter _auditReporter = new();
+    private BackupPermissionLock _permissionLock = new();
+    private BackupThrottleEngine? _throttleEngine;
+
+    // 企业容灾标签页控件
+    private TextBox? _vssSourceBox;
+    private TextBox? _vssDestBox;
+    private TextBox? _vssPasswordBox;
+    private AccentButton? _vssBackupBtn;
+    private Panel? _vssProgressBar;
+    private Label? _vssProgressLabel;
+    private TextBox? _poolPathBox;
+    private AccentButton? _poolInitBtn;
+    private AccentButton? _poolLockBtn;
+    private AccentButton? _poolUnlockBtn;
+    private Label? _poolStatusLabel;
+    private AccentButton? _healthCheckBtn;
+    private Label? _healthResultLabel;
+    private TextBox? _resumeFileBox;
+    private AccentButton? _resumeStartBtn;
+    private AccentButton? _resumeResumeBtn;
+    private Label? _resumeStatusLabel;
+    private TextBox? _filterExcludesBox;
+    private Label? _filterStatsLabel;
+
+    // 快照审计标签页控件
+    private TextBox? _chainSourceBox;
+    private TextBox? _chainDirBox;
+    private AccentButton? _createChainBtn;
+    private Label? _chainListLabel;
+    private AccentButton? _auditCompareBtn;
+    private Label? _auditResultLabel;
+    private TextBox? _lockFileBox;
+    private AccentButton? _lockBtn;
+    private AccentButton? _unlockBtn;
+    private Label? _lockStatusLabel;
+    private ComboBox? _throttleModeCombo;
+    private NumericUpDown? _throttleIoNum;
+    private AccentButton? _throttleApplyBtn;
+    private Label? _throttleStatusLabel;
 
     // 备份标签页控件
     private ComboBox? _backupTypeCombo;
@@ -145,6 +195,8 @@ public class BackupPage : Page
             case 1: BuildRestoreTab(y); break;
             case 2: BuildDatabaseTab(y); break;
             case 3: BuildLifecycleTab(y); break;
+            case 4: BuildEnterpriseTab(y); break;
+            case 5: BuildSnapshotAuditTab(y); break;
         }
     }
 
@@ -1954,6 +2006,788 @@ public class BackupPage : Page
         {
             MessageBoxHelper.Error($"操作失败：{ex.Message}");
         }
+    }
+
+    #endregion
+
+    #region 标签页5：企业容灾
+
+    private void BuildEnterpriseTab(int y)
+    {
+        int cw = ContentWidth;
+
+        // ===== VSS 卷影一致性备份 =====
+        CreateSectionTitle("VSS 卷影快照一致性备份", 0, y);
+        y += 30;
+
+        var vssCard = CreateCard(0, y, cw, 130);
+        var vssDesc = new Label
+        {
+            Text = "系统原生卷影服务 | 冻结文件瞬时状态 | 数据库/运行中文件/ERP 100% 无损备份",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(16, 8),
+            Size = new Size(cw - 32, 18),
+            BackColor = Color.Transparent
+        };
+        vssCard.Controls.Add(vssDesc);
+
+        _vssSourceBox = new TextBox
+        {
+            Location = new Point(100, 30),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "输入要 VSS 备份的目录路径"
+        };
+        vssCard.Controls.Add(_vssSourceBox);
+        var vssSrcLabel = new Label { Text = "源目录：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 32), Size = new Size(80, 22), BackColor = Color.Transparent };
+        vssCard.Controls.Add(vssSrcLabel);
+
+        _vssDestBox = new TextBox
+        {
+            Location = new Point(100, 58),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "备份目标目录"
+        };
+        vssCard.Controls.Add(_vssDestBox);
+        var vssDestLabel = new Label { Text = "目标：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 60), Size = new Size(80, 22), BackColor = Color.Transparent };
+        vssCard.Controls.Add(vssDestLabel);
+
+        _vssPasswordBox = new TextBox
+        {
+            Location = new Point(100, 86),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            UseSystemPasswordChar = true,
+            PlaceholderText = "加密口令"
+        };
+        vssCard.Controls.Add(_vssPasswordBox);
+        var vssPwdLabel = new Label { Text = "密码：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 88), Size = new Size(80, 22), BackColor = Color.Transparent };
+        vssCard.Controls.Add(vssPwdLabel);
+
+        _vssBackupBtn = new AccentButton { Text = "VSS 备份", Location = new Point(cw - 168, 28), Size = new Size(140, 32) };
+        _vssBackupBtn.Click += StartVssBackup;
+        vssCard.Controls.Add(_vssBackupBtn);
+
+        _vssProgressBar = CreateProgressBar(vssCard, 100, 92, cw - 280);
+        _vssProgressLabel = new Label { Text = "就绪", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(100, 112), Size = new Size(cw - 280, 16), BackColor = Color.Transparent };
+        vssCard.Controls.Add(_vssProgressLabel);
+
+        y += 140;
+
+        // ===== 防勒索隔离备份池 =====
+        CreateSectionTitle("防勒索只读隔离备份池 (ACL 锁定)", 0, y);
+        y += 30;
+
+        var poolCard = CreateCard(0, y, cw, 80);
+        _poolPathBox = new TextBox
+        {
+            Location = new Point(100, 10),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "备份池目录路径（将自动创建并 ACL 锁定）"
+        };
+        poolCard.Controls.Add(_poolPathBox);
+        var poolPathLabel = new Label { Text = "池路径：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 12), Size = new Size(80, 22), BackColor = Color.Transparent };
+        poolCard.Controls.Add(poolPathLabel);
+
+        _poolInitBtn = new AccentButton { Text = "初始化池", Location = new Point(cw - 168, 6), Size = new Size(140, 32) };
+        _poolInitBtn.Click += InitBackupPool;
+        poolCard.Controls.Add(_poolInitBtn);
+
+        _poolLockBtn = new AccentButton { Text = "锁定", Location = new Point(16, 42), Size = new Size(100, 30) };
+        _poolLockBtn.Click += LockPool;
+        poolCard.Controls.Add(_poolLockBtn);
+
+        _poolUnlockBtn = new AccentButton { Text = "临时解锁", Location = new Point(126, 42), Size = new Size(100, 30) };
+        _poolUnlockBtn.Click += UnlockPool;
+        poolCard.Controls.Add(_poolUnlockBtn);
+
+        _poolStatusLabel = new Label { Text = "未初始化", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(240, 46), Size = new Size(cw - 260, 22), BackColor = Color.Transparent };
+        poolCard.Controls.Add(_poolStatusLabel);
+
+        y += 90;
+
+        // ===== 备份健康校验 =====
+        CreateSectionTitle("全自动备份健康校验", 0, y);
+        y += 30;
+
+        var healthCard = CreateCard(0, y, cw, 60);
+        _healthCheckBtn = new AccentButton { Text = "校验全部备份", Location = new Point(16, 10), Size = new Size(160, 32) };
+        _healthCheckBtn.Click += RunHealthCheck;
+        healthCard.Controls.Add(_healthCheckBtn);
+
+        _healthResultLabel = new Label { Text = "点击按钮校验所有 .lgbackup 文件完整性", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(190, 14), Size = new Size(cw - 210, 40), BackColor = Color.Transparent };
+        healthCard.Controls.Add(_healthResultLabel);
+
+        y += 70;
+
+        // ===== 断点续备 =====
+        CreateSectionTitle("超大文件断点续备", 0, y);
+        y += 30;
+
+        var resumeCard = CreateCard(0, y, cw, 80);
+        _resumeFileBox = new TextBox
+        {
+            Location = new Point(100, 10),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "超大文件路径（支持几十G、上百G镜像）"
+        };
+        resumeCard.Controls.Add(_resumeFileBox);
+        var resumeFileLabel = new Label { Text = "源文件：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 12), Size = new Size(80, 22), BackColor = Color.Transparent };
+        resumeCard.Controls.Add(resumeFileLabel);
+
+        _resumeStartBtn = new AccentButton { Text = "开始续备", Location = new Point(cw - 168, 6), Size = new Size(140, 32) };
+        _resumeStartBtn.Click += StartResumableBackup;
+        resumeCard.Controls.Add(_resumeStartBtn);
+
+        _resumeResumeBtn = new AccentButton { Text = "恢复中断", Location = new Point(16, 42), Size = new Size(100, 30) };
+        _resumeResumeBtn.Click += ResumeInterruptedBackup;
+        resumeCard.Controls.Add(_resumeResumeBtn);
+
+        _resumeStatusLabel = new Label { Text = "支持网络/断电中断续传", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(130, 46), Size = new Size(cw - 150, 22), BackColor = Color.Transparent };
+        resumeCard.Controls.Add(_resumeStatusLabel);
+
+        y += 90;
+
+        // ===== 智能过滤引擎 =====
+        CreateSectionTitle("智能备份黑白名单过滤", 0, y);
+        y += 30;
+
+        var filterCard = CreateCard(0, y, cw, 80);
+        var filterDesc = new Label
+        {
+            Text = "默认过滤：临时文件/缓存/日志/回收站/系统文件 | 支持自定义排除扩展名、目录、模式",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(16, 8),
+            Size = new Size(cw - 32, 18),
+            BackColor = Color.Transparent
+        };
+        filterCard.Controls.Add(filterDesc);
+
+        _filterExcludesBox = new TextBox
+        {
+            Location = new Point(100, 30),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "自定义排除项，逗号分隔（如 .iso,.vmdk,node_modules）"
+        };
+        filterCard.Controls.Add(_filterExcludesBox);
+        var filterLabel = new Label { Text = "排除项：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 32), Size = new Size(80, 22), BackColor = Color.Transparent };
+        filterCard.Controls.Add(filterLabel);
+
+        var filterApplyBtn = new AccentButton { Text = "应用过滤", Location = new Point(cw - 168, 26), Size = new Size(140, 32) };
+        filterApplyBtn.Click += ApplyFilter;
+        filterCard.Controls.Add(filterApplyBtn);
+
+        _filterStatsLabel = new Label { Text = $"规则数：{_filterEngine.Rules.Count} | 已过滤：{_filterEngine.TotalFiltered} 文件", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(16, 58), Size = new Size(cw - 32, 18), BackColor = Color.Transparent };
+        filterCard.Controls.Add(_filterStatsLabel);
+
+        y += 90;
+    }
+
+    private async void StartVssBackup()
+    {
+        var source = _vssSourceBox?.Text?.Trim();
+        var dest = _vssDestBox?.Text?.Trim();
+        var password = _vssPasswordBox?.Text;
+
+        if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest) || string.IsNullOrEmpty(password))
+        {
+            MessageBoxHelper.Warn("请填写源目录、目标目录和加密密码。");
+            return;
+        }
+
+        _isBusy = true;
+        if (_vssBackupBtn != null) _vssBackupBtn.Enabled = false;
+
+        try
+        {
+            _vssEngine?.Dispose();
+            _vssEngine = new VssShadowCopyEngine(AppState);
+
+            if (_vssProgressLabel != null) { _vssProgressLabel.Text = "创建 VSS 卷影快照中..."; _vssProgressLabel.ForeColor = Theme.Accent; }
+            UpdateProgressBar(_vssProgressBar, 10);
+
+            BackupManifest? manifest = null;
+            await Task.Run(() =>
+            {
+                manifest = _vssEngine.BackupDirectoryWithVss(source, dest, password, null);
+            });
+
+            if (manifest != null)
+            {
+                UpdateProgressBar(_vssProgressBar, 100);
+                if (_vssProgressLabel != null) { _vssProgressLabel.Text = "VSS 备份完成"; _vssProgressLabel.ForeColor = Theme.Success; }
+                MessageBoxHelper.Info($"VSS 卷影快照备份成功！\n\n文件数：{manifest.FileCount}\n大小：{manifest.TotalSize / 1024.0:F1} KB\n分片：{manifest.ShardCount}\n算法：{manifest.EncryptedAlgorithm}");
+            }
+            else
+            {
+                if (_vssProgressLabel != null) { _vssProgressLabel.Text = "VSS 不可用，请以管理员运行"; _vssProgressLabel.ForeColor = Theme.Warning; }
+                MessageBoxHelper.Warn("VSS 卷影快照创建失败。\n请确保以管理员权限运行 LightGuard，且 VSS 服务已启动。");
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_vssProgressLabel != null) { _vssProgressLabel.Text = "VSS 备份失败"; _vssProgressLabel.ForeColor = Theme.Error; }
+            MessageBoxHelper.Error($"VSS 备份失败：{ex.Message}");
+        }
+        finally
+        {
+            _isBusy = false;
+            if (_vssBackupBtn != null) _vssBackupBtn.Enabled = true;
+        }
+    }
+
+    private void InitBackupPool()
+    {
+        var path = _poolPathBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(path))
+        {
+            MessageBoxHelper.Warn("请输入备份池目录路径。");
+            return;
+        }
+
+        try
+        {
+            _backupPool?.Dispose();
+            _backupPool = new RansomwareProofBackupPool();
+            _backupPool.Initialize(path);
+
+            var info = _backupPool.GetPoolInfo();
+            if (_poolStatusLabel != null)
+            {
+                _poolStatusLabel.Text = $"已锁定 | 文件数：{info.FileCount} | 大小：{info.TotalSizeBytes / 1024.0:F1} KB";
+                _poolStatusLabel.ForeColor = Theme.Success;
+            }
+            MessageBoxHelper.Info($"防勒索备份池已初始化并锁定！\n\n路径：{path}\n状态：ACL 已锁定（勒索病毒无法写入/删除/加密）");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"初始化失败：{ex.Message}");
+        }
+    }
+
+    private void LockPool()
+    {
+        if (_backupPool == null) { MessageBoxHelper.Warn("请先初始化备份池。"); return; }
+        try
+        {
+            _backupPool.LockPool();
+            var info = _backupPool.GetPoolInfo();
+            if (_poolStatusLabel != null) { _poolStatusLabel.Text = $"已锁定 | 文件数：{info.FileCount}"; _poolStatusLabel.ForeColor = Theme.Success; }
+            MessageBoxHelper.Info("备份池已锁定。病毒/普通用户/第三方程序无权写入。");
+        }
+        catch (Exception ex) { MessageBoxHelper.Error($"锁定失败：{ex.Message}"); }
+    }
+
+    private void UnlockPool()
+    {
+        if (_backupPool == null) { MessageBoxHelper.Warn("请先初始化备份池。"); return; }
+        try
+        {
+            using var token = _backupPool.UnlockPoolForWrite();
+            if (_poolStatusLabel != null) { _poolStatusLabel.Text = "临时解锁中（写入后自动锁定）"; _poolStatusLabel.ForeColor = Theme.Warning; }
+            MessageBoxHelper.Info("备份池已临时解锁。写入完成后将自动重新锁定。");
+        }
+        catch (Exception ex) { MessageBoxHelper.Error($"解锁失败：{ex.Message}"); }
+    }
+
+    private async void RunHealthCheck()
+    {
+        if (_healthCheckBtn != null) _healthCheckBtn.Enabled = false;
+        if (_healthResultLabel != null) { _healthResultLabel.Text = "正在校验所有备份..."; _healthResultLabel.ForeColor = Theme.Accent; }
+
+        try
+        {
+            var destDir = _encBackupModule?.DestinationDirectory ?? ConfigManager.GetBackupDir();
+            BatchHealthReport? report = null;
+            await Task.Run(() => report = _healthVerifier.VerifyAllBackups(destDir));
+
+            if (_healthResultLabel != null)
+            {
+                _healthResultLabel.Text = report?.ToSummary() ?? "校验完成";
+                _healthResultLabel.ForeColor = (report?.CorruptedCount > 0) ? Theme.Warning : Theme.Success;
+            }
+            MessageBoxHelper.Info(report?.ToSummary() ?? "校验完成");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"健康校验失败：{ex.Message}");
+        }
+        finally
+        {
+            if (_healthCheckBtn != null) _healthCheckBtn.Enabled = true;
+        }
+    }
+
+    private async void StartResumableBackup()
+    {
+        var file = _resumeFileBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(file) || !File.Exists(file))
+        {
+            MessageBoxHelper.Warn("请输入有效的源文件路径。");
+            return;
+        }
+
+        var destDir = Path.Combine(ConfigManager.GetBackupDir(), "resumable");
+        var password = _backupPasswordBox?.Text ?? _vssPasswordBox?.Text;
+        if (string.IsNullOrEmpty(password))
+        {
+            MessageBoxHelper.Warn("请在加密备份标签页输入密码。");
+            return;
+        }
+
+        if (_resumeStartBtn != null) _resumeStartBtn.Enabled = false;
+        if (_resumeStatusLabel != null) { _resumeStatusLabel.Text = "开始分块加密备份..."; _resumeStatusLabel.ForeColor = Theme.Accent; }
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                _resumableEngine.StartResumableBackup(file, password, destDir, 16 * 1024 * 1024, null);
+            });
+            if (_resumeStatusLabel != null) { _resumeStatusLabel.Text = "断点续备完成！"; _resumeStatusLabel.ForeColor = Theme.Success; }
+            MessageBoxHelper.Info("断点续备完成！\n\n分块已加密写入，支持中断后恢复。");
+        }
+        catch (Exception ex)
+        {
+            if (_resumeStatusLabel != null) { _resumeStatusLabel.Text = $"续备中断：{ex.Message}"; _resumeStatusLabel.ForeColor = Theme.Warning; }
+            MessageBoxHelper.Warn($"续备中断（可点击\"恢复中断\"继续）：\n{ex.Message}");
+        }
+        finally
+        {
+            if (_resumeStartBtn != null) _resumeStartBtn.Enabled = true;
+        }
+    }
+
+    private async void ResumeInterruptedBackup()
+    {
+        var destDir = Path.Combine(ConfigManager.GetBackupDir(), "resumable");
+        var password = _backupPasswordBox?.Text ?? _vssPasswordBox?.Text;
+
+        try
+        {
+            var sessions = _resumableEngine.ListPendingSessions(destDir);
+            if (sessions.Count == 0)
+            {
+                MessageBoxHelper.Info("没有待恢复的中断备份会话。");
+                return;
+            }
+
+            var sessionFile = sessions[0];
+            if (_resumeStatusLabel != null) { _resumeStatusLabel.Text = "恢复中断备份中..."; _resumeStatusLabel.ForeColor = Theme.Accent; }
+
+            await Task.Run(() =>
+            {
+                _resumableEngine.ResumeBackup(sessionFile, password ?? "", null);
+            });
+
+            if (_resumeStatusLabel != null) { _resumeStatusLabel.Text = "中断备份已恢复完成！"; _resumeStatusLabel.ForeColor = Theme.Success; }
+            MessageBoxHelper.Info("中断备份已恢复完成！");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"恢复失败：{ex.Message}");
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        var excludes = _filterExcludesBox?.Text?.Trim();
+        if (!string.IsNullOrEmpty(excludes))
+        {
+            foreach (var item in excludes.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var t = item.Trim();
+                if (t.StartsWith(".")) _filterEngine.AddExcludeExtension(t);
+                else if (t.Contains('/') || t.Contains('\\') || t.Contains(Path.DirectorySeparatorChar)) _filterEngine.AddExcludeDirectory(t);
+                else _filterEngine.AddExcludePattern(t);
+            }
+        }
+
+        if (_filterStatsLabel != null)
+        {
+            _filterStatsLabel.Text = $"规则数：{_filterEngine.Rules.Count} | 已过滤：{_filterEngine.TotalFiltered} 文件 | 节省：{_filterEngine.TotalFilteredBytes / 1024.0:F1} KB";
+        }
+        MessageBoxHelper.Info($"过滤规则已应用！\n\n当前规则数：{_filterEngine.Rules.Count}\n已过滤文件：{_filterEngine.TotalFiltered}\n节省空间：{_filterEngine.TotalFilteredBytes / 1024.0:F1} KB");
+    }
+
+    #endregion
+
+    #region 标签页6：快照链与审计
+
+    private void BuildSnapshotAuditTab(int y)
+    {
+        int cw = ContentWidth;
+
+        // ===== 多版本快照链 =====
+        CreateSectionTitle("多版本快照时间链系统 (.lgchain)", 0, y);
+        y += 30;
+
+        var chainCard = CreateCard(0, y, cw, 100);
+        _chainSourceBox = new TextBox
+        {
+            Location = new Point(100, 10),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "源路径（用于创建快照链）"
+        };
+        chainCard.Controls.Add(_chainSourceBox);
+        var chainSrcLabel = new Label { Text = "源路径：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 12), Size = new Size(80, 22), BackColor = Color.Transparent };
+        chainCard.Controls.Add(chainSrcLabel);
+
+        _chainDirBox = new TextBox
+        {
+            Location = new Point(100, 38),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "快照链存储目录",
+            Text = ConfigManager.GetBackupDir()
+        };
+        chainCard.Controls.Add(_chainDirBox);
+        var chainDirLabel = new Label { Text = "链目录：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 40), Size = new Size(80, 22), BackColor = Color.Transparent };
+        chainCard.Controls.Add(chainDirLabel);
+
+        _createChainBtn = new AccentButton { Text = "创建快照链", Location = new Point(cw - 168, 6), Size = new Size(140, 32) };
+        _createChainBtn.Click += CreateSnapshotChain;
+        chainCard.Controls.Add(_createChainBtn);
+
+        var chainListBtn = new AccentButton { Text = "列出快照链", Location = new Point(cw - 168, 38), Size = new Size(140, 32) };
+        chainListBtn.Click += ListSnapshotChains;
+        chainCard.Controls.Add(chainListBtn);
+
+        _chainListLabel = new Label { Text = "点击\"列出快照链\"查看已有快照链", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(16, 70), Size = new Size(cw - 32, 24), BackColor = Color.Transparent };
+        chainCard.Controls.Add(_chainListLabel);
+
+        y += 110;
+
+        // ===== 差异审计报告 =====
+        CreateSectionTitle("备份差异审计报告", 0, y);
+        y += 30;
+
+        var auditCard = CreateCard(0, y, cw, 80);
+        var auditDesc = new Label
+        {
+            Text = "自动对比两次备份差异：新增/删除/修改/重命名 | 批量异动风险检测（勒索预判）| CSV 导出",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(16, 8),
+            Size = new Size(cw - 32, 18),
+            BackColor = Color.Transparent
+        };
+        auditCard.Controls.Add(auditDesc);
+
+        _auditCompareBtn = new AccentButton { Text = "生成差异报告", Location = new Point(16, 32), Size = new Size(160, 32) };
+        _auditCompareBtn.Click += GenerateAuditReport;
+        auditCard.Controls.Add(_auditCompareBtn);
+
+        _auditResultLabel = new Label { Text = "选择备份目录后点击生成报告", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(190, 36), Size = new Size(cw - 210, 40), BackColor = Color.Transparent };
+        auditCard.Controls.Add(_auditResultLabel);
+
+        y += 90;
+
+        // ===== 备份防删除权限锁 =====
+        CreateSectionTitle("备份防删除权限锁（三层安全）", 0, y);
+        y += 30;
+
+        var lockCard = CreateCard(0, y, cw, 80);
+        _lockFileBox = new TextBox
+        {
+            Location = new Point(100, 10),
+            Size = new Size(cw - 280, 24),
+            Font = Theme.BodyFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "要锁定的 .lgbackup 文件路径"
+        };
+        lockCard.Controls.Add(_lockFileBox);
+        var lockFileLabel = new Label { Text = "文件：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 12), Size = new Size(80, 22), BackColor = Color.Transparent };
+        lockCard.Controls.Add(lockFileLabel);
+
+        _lockBtn = new AccentButton { Text = "三层锁定", Location = new Point(cw - 168, 6), Size = new Size(140, 32) };
+        _lockBtn.Click += LockBackupFile;
+        lockCard.Controls.Add(_lockBtn);
+
+        _unlockBtn = new AccentButton { Text = "解锁", Location = new Point(16, 42), Size = new Size(100, 30) };
+        _unlockBtn.Click += UnlockBackupFile;
+        lockCard.Controls.Add(_unlockBtn);
+
+        _lockStatusLabel = new Label { Text = "ACL + 只读属性 + 锁定标记 = 三层防护", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(130, 46), Size = new Size(cw - 150, 22), BackColor = Color.Transparent };
+        lockCard.Controls.Add(_lockStatusLabel);
+
+        y += 90;
+
+        // ===== 智能节流错峰备份 =====
+        CreateSectionTitle("智能节流错峰备份策略", 0, y);
+        y += 30;
+
+        var throttleCard = CreateCard(0, y, cw, 100);
+        var throttleDesc = new Label
+        {
+            Text = "空闲全速 | 前台降速 | 夜间高速 | 不卡顿办公、不影响服务器业务",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(16, 8),
+            Size = new Size(cw - 32, 18),
+            BackColor = Color.Transparent
+        };
+        throttleCard.Controls.Add(throttleDesc);
+
+        var modeLabel = new Label { Text = "节流模式：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(16, 32), Size = new Size(80, 22), BackColor = Color.Transparent };
+        throttleCard.Controls.Add(modeLabel);
+
+        _throttleModeCombo = new ComboBox
+        {
+            Location = new Point(100, 30),
+            Size = new Size(180, 24),
+            FlatStyle = FlatStyle.Flat,
+            Font = Theme.BodyFont,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _throttleModeCombo.Items.AddRange(new object[] { "全速备份（空闲）", "降速备份（前台）", "夜间高速（22:00-06:00）", "自定义" });
+        _throttleModeCombo.SelectedIndex = 2;
+        throttleCard.Controls.Add(_throttleModeCombo);
+
+        var ioLabel = new Label { Text = "IO上限(MB/s)：", Font = Theme.BodyFont, ForeColor = Theme.TextSecondary, Location = new Point(300, 32), Size = new Size(100, 22), BackColor = Color.Transparent };
+        throttleCard.Controls.Add(ioLabel);
+
+        _throttleIoNum = new NumericUpDown
+        {
+            Location = new Point(404, 30),
+            Size = new Size(80, 24),
+            Minimum = 1,
+            Maximum = 1000,
+            Value = 50,
+            Font = Theme.BodyFont
+        };
+        throttleCard.Controls.Add(_throttleIoNum);
+
+        _throttleApplyBtn = new AccentButton { Text = "应用策略", Location = new Point(cw - 168, 26), Size = new Size(140, 32) };
+        _throttleApplyBtn.Click += ApplyThrottle;
+        throttleCard.Controls.Add(_throttleApplyBtn);
+
+        _throttleStatusLabel = new Label { Text = "当前模式：夜间高速 | IO上限：50 MB/s", Font = Theme.SmallFont, ForeColor = Theme.TextTertiary, Location = new Point(16, 68), Size = new Size(cw - 32, 22), BackColor = Color.Transparent };
+        throttleCard.Controls.Add(_throttleStatusLabel);
+
+        y += 110;
+    }
+
+    private void CreateSnapshotChain()
+    {
+        var source = _chainSourceBox?.Text?.Trim();
+        var chainDir = _chainDirBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(chainDir))
+        {
+            MessageBoxHelper.Warn("请填写源路径和快照链存储目录。");
+            return;
+        }
+
+        try
+        {
+            var chain = _chainManager.CreateChain(source, chainDir);
+            if (_chainListLabel != null)
+            {
+                _chainListLabel.Text = $"快照链已创建 | ID：{chain.ChainId[..8]} | 节点数：{chain.NodeCount}";
+                _chainListLabel.ForeColor = Theme.Success;
+            }
+            MessageBoxHelper.Info($"快照链创建成功！\n\n链 ID：{chain.ChainId}\n源路径：{chain.SourcePath}\n后续备份可自动追加到此链。");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"创建快照链失败：{ex.Message}");
+        }
+    }
+
+    private void ListSnapshotChains()
+    {
+        try
+        {
+            var chainDir = _chainDirBox?.Text?.Trim() ?? ConfigManager.GetBackupDir();
+            var chains = _chainManager.ListChains(chainDir);
+
+            if (chains.Count == 0)
+            {
+                if (_chainListLabel != null) _chainListLabel.Text = "暂无快照链记录";
+                MessageBoxHelper.Info("暂无快照链记录。");
+                return;
+            }
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"共 {chains.Count} 条快照链：\n");
+            foreach (var c in chains)
+            {
+                sb.AppendLine($"链ID：{c.ChainId[..8]}... | 源：{c.SourcePath} | 节点：{c.NodeCount} | 总大小：{c.TotalSizeBytes / 1024.0:F1} KB | 创建：{c.CreatedAt:MM-dd HH:mm}");
+            }
+
+            if (_chainListLabel != null)
+            {
+                _chainListLabel.Text = $"共 {chains.Count} 条快照链 | 总节点：{chains.Sum(c => c.NodeCount)}";
+                _chainListLabel.ForeColor = Theme.Success;
+            }
+            MessageBoxHelper.Info(sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"列出快照链失败：{ex.Message}");
+        }
+    }
+
+    private async void GenerateAuditReport()
+    {
+        if (_auditCompareBtn != null) _auditCompareBtn.Enabled = false;
+        if (_auditResultLabel != null) { _auditResultLabel.Text = "正在生成差异审计报告..."; _auditResultLabel.ForeColor = Theme.Accent; }
+
+        try
+        {
+            var destDir = _encBackupModule?.DestinationDirectory ?? ConfigManager.GetBackupDir();
+            string? summary = null;
+            await Task.Run(() =>
+            {
+                var report = _healthVerifier.GenerateHealthReport(destDir);
+                summary = report;
+            });
+
+            if (_auditResultLabel != null)
+            {
+                _auditResultLabel.Text = summary ?? "报告已生成";
+                _auditResultLabel.ForeColor = Theme.Success;
+            }
+            MessageBoxHelper.Info($"差异审计报告\n\n{summary}");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"生成报告失败：{ex.Message}");
+        }
+        finally
+        {
+            if (_auditCompareBtn != null) _auditCompareBtn.Enabled = true;
+        }
+    }
+
+    private void LockBackupFile()
+    {
+        var file = _lockFileBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(file) || !File.Exists(file))
+        {
+            MessageBoxHelper.Warn("请输入有效的 .lgbackup 文件路径。");
+            return;
+        }
+
+        try
+        {
+            _permissionLock.LockBackupFile(file);
+            var status = _permissionLock.GetLockStatus(file);
+            if (_lockStatusLabel != null)
+            {
+                _lockStatusLabel.Text = $"ACL：{(status.AclLocked ? "已锁" : "未锁")} | 属性：{(status.AttributeLocked ? "只读" : "可写")} | 标记：{(status.MarkerLocked ? "已标记" : "无")}";
+                _lockStatusLabel.ForeColor = Theme.Success;
+            }
+            MessageBoxHelper.Info("三层防删除权限锁已应用！\n\n第一层：NTFS ACL 权限锁\n第二层：只读+隐藏属性\n第三层：锁定标记文件");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"锁定失败：{ex.Message}");
+        }
+    }
+
+    private void UnlockBackupFile()
+    {
+        var file = _lockFileBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(file))
+        {
+            MessageBoxHelper.Warn("请输入文件路径。");
+            return;
+        }
+
+        try
+        {
+            _permissionLock.UnlockBackupFile(file);
+            if (_lockStatusLabel != null)
+            {
+                _lockStatusLabel.Text = "已解除三层锁定";
+                _lockStatusLabel.ForeColor = Theme.TextSecondary;
+            }
+            MessageBoxHelper.Info("已解除三层防删除锁定。");
+        }
+        catch (Exception ex)
+        {
+            MessageBoxHelper.Error($"解锁失败：{ex.Message}");
+        }
+    }
+
+    private void ApplyThrottle()
+    {
+        var modeIdx = _throttleModeCombo?.SelectedIndex ?? 2;
+        var maxIo = (int)(_throttleIoNum?.Value ?? 50);
+
+        var mode = modeIdx switch
+        {
+            0 => ThrottleMode.FullSpeed,
+            1 => ThrottleMode.ReducedSpeed,
+            2 => ThrottleMode.NightBoost,
+            3 => ThrottleMode.Custom,
+            _ => ThrottleMode.NightBoost
+        };
+
+        var config = new ThrottleConfig
+        {
+            Mode = mode,
+            MaxIoMBps = maxIo,
+            MaxNetworkMBps = Math.Max(10, maxIo / 2),
+            NightStart = TimeSpan.FromHours(22),
+            NightEnd = TimeSpan.FromHours(6),
+            PauseOnForeground = mode == ThrottleMode.ReducedSpeed,
+            PauseOnFullscreen = true
+        };
+
+        _throttleEngine?.Dispose();
+        _throttleEngine = new BackupThrottleEngine(config);
+        _throttleEngine.StartMonitoring();
+
+        var modeText = mode switch
+        {
+            ThrottleMode.FullSpeed => "全速备份",
+            ThrottleMode.ReducedSpeed => "降速备份",
+            ThrottleMode.NightBoost => "夜间高速",
+            ThrottleMode.Custom => "自定义",
+            _ => "未知"
+        };
+
+        if (_throttleStatusLabel != null)
+        {
+            _throttleStatusLabel.Text = $"当前模式：{modeText} | IO上限：{maxIo} MB/s | 网络上限：{config.MaxNetworkMBps} MB/s";
+            _throttleStatusLabel.ForeColor = Theme.Success;
+        }
+        MessageBoxHelper.Info($"节流策略已应用！\n\n模式：{modeText}\nIO上限：{maxIo} MB/s\n网络上限：{config.MaxNetworkMBps} MB/s\n前台暂停：{config.PauseOnForeground}\n全屏暂停：{config.PauseOnFullscreen}");
     }
 
     #endregion
