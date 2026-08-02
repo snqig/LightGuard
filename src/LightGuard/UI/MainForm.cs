@@ -209,6 +209,7 @@ public class MainForm : Form
             ("防火墙", "🌐", "firewall"),
             ("勒索防护", "🦠", "ransomware"),
             ("加密备份", "💾", "backup"),
+            ("文件审计", "📁", "audit"),
             ("自动更新", "🔄", "update"),
             ("设置", "⚙", "settings"),
         };
@@ -293,6 +294,7 @@ public class MainForm : Form
         _pages["firewall"] = new FirewallPage(_appState);
         _pages["ransomware"] = new RansomwarePage(_appState);
         _pages["backup"] = new BackupPage(_appState);
+        _pages["audit"] = new FileServerAuditPage(_appState);
         _pages["update"] = new UpdatePage(_appState);
         _pages["settings"] = new SettingsPage(_appState);
 
