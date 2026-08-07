@@ -156,29 +156,35 @@ public sealed class IncrementalUpdateService : IDisposable
             var totalBytes = response.Content.Headers.ContentLength ?? -1;
             long downloadedBytes = 0;
 
-            await using var contentStream = await response.Content.ReadAsStreamAsync();
-            await using var fileStream = new FileStream(packagePath, FileMode.Create, FileAccess.Write, FileShare.None);
-            var buffer = new byte[81920];
-            int bytesRead;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
+            // 下载到本地文件（显式作用域：先释放文件句柄，再进行校验/删除。
+            // FileShare.None 下若句柄未释放，同进程内的重读/删除会被判定为“文件被占用”）
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                downloadedBytes += bytesRead;
-                if (totalBytes > 0)
+                await using var contentStream = await response.Content.ReadAsStreamAsync();
+                await using var fileStream = RetryFileOp(() =>
+                    new FileStream(packagePath, FileMode.Create, FileAccess.Write, FileShare.None));
+                var buffer = new byte[81920];
+                int bytesRead;
+
+                while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
                 {
-                    var pct = (int)(downloadedBytes * 90 / totalBytes) + 5;
-                    progress?.Report(Math.Min(pct, 95));
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                    downloadedBytes += bytesRead;
+                    if (totalBytes > 0)
+                    {
+                        var pct = (int)(downloadedBytes * 90 / totalBytes) + 5;
+                        progress?.Report(Math.Min(pct, 95));
+                    }
                 }
             }
 
             progress?.Report(95);
 
-            // SHA256 完整性校验
-            if (!string.IsNullOrEmpty(manifest.Sha256) && !VerifySha256(packagePath, manifest.Sha256))
+            // SHA256 完整性校验（带重试，应对杀软对新写入文件的瞬时锁）
+            if (!string.IsNullOrEmpty(manifest.Sha256) &&
+                !WaitUntil(() => VerifySha256(packagePath, manifest.Sha256)))
             {
                 ErrorReporter.Log($"增量更新：SHA256 校验失败，已删除 {packagePath}", "ERROR");
-                File.Delete(packagePath);
+                RetryFileOp(() => { File.Delete(packagePath); return true; });
                 progress?.Report(100);
                 return null;
             }
@@ -186,11 +192,14 @@ public sealed class IncrementalUpdateService : IDisposable
             // RSA 数字签名校验（防更新服务器劫持）
             if (!string.IsNullOrEmpty(manifest.Signature))
             {
-                var sigResult = UpdateSignatureVerifier.VerifyFileSignature(packagePath, manifest.Signature);
-                if (!sigResult.IsValid)
+                var sigResult = WaitUntil(() => UpdateSignatureVerifier
+                    .VerifyFileSignature(packagePath, manifest.Signature).IsValid)
+                    ? UpdateSignatureVerifier.VerifyFileSignature(packagePath, manifest.Signature)
+                    : null;
+                if (sigResult == null || !sigResult.IsValid)
                 {
-                    ErrorReporter.Log($"增量更新：RSA 签名验证失败 {sigResult.Error}", "ERROR");
-                    File.Delete(packagePath);
+                    ErrorReporter.Log($"增量更新：RSA 签名验证失败 {sigResult?.Error ?? "未知"}", "ERROR");
+                    RetryFileOp(() => { File.Delete(packagePath); return true; });
                     progress?.Report(100);
                     return null;
                 }
@@ -252,7 +261,7 @@ public sealed class IncrementalUpdateService : IDisposable
             var extractDir = Path.Combine(_workDir, "extracted");
             if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
             Directory.CreateDirectory(extractDir);
-            ZipFile.ExtractToDirectory(packagePath, extractDir, true);
+            RetryFileOp(() => { ZipFile.ExtractToDirectory(packagePath, extractDir, true); return true; });
 
             // 备份目录（支持回滚）
             var backupDir = Path.Combine(_workDir, "backup", manifest.Version);
@@ -277,11 +286,11 @@ public sealed class IncrementalUpdateService : IDisposable
                 {
                     var bak = Path.Combine(backupDir, rel);
                     Directory.CreateDirectory(Path.GetDirectoryName(bak)!);
-                    File.Copy(dest, bak, true);
+                    RetryFileOp(() => { File.Copy(dest, bak, true); return true; });
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                File.Copy(src, dest, true);
+                RetryFileOp(() => { File.Copy(src, dest, true); return true; });
                 replaced++;
             }
 
@@ -295,8 +304,8 @@ public sealed class IncrementalUpdateService : IDisposable
                     // 备份后删除
                     var bak = Path.Combine(backupDir, rel);
                     Directory.CreateDirectory(Path.GetDirectoryName(bak)!);
-                    File.Copy(target, bak, true);
-                    File.Delete(target);
+                    RetryFileOp(() => { File.Copy(target, bak, true); return true; });
+                    RetryFileOp(() => { File.Delete(target); return true; });
                     deleted++;
                 }
             }
@@ -332,6 +341,41 @@ public sealed class IncrementalUpdateService : IDisposable
             return typeof(IncrementalUpdateService).Assembly.GetName().Version?.ToString() ?? "0.0.0";
         }
         catch { return "0.0.0"; }
+    }
+
+    // ==================== 文件操作重试（杀软瞬时锁防护） ====================
+
+    /// <summary>
+    /// 带异常重试的文件操作。
+    /// <para>杀软/扫描器常在新写入的文件上短暂持有独占锁，导致立即重读/删除失败；
+    /// 此处遇到 IOException / UnauthorizedAccessException 时等待后重试，上限约 6 秒。</para>
+    /// </summary>
+    private static T RetryFileOp<T>(Func<T> action, int attempts = 12, int delayMs = 500)
+    {
+        Exception? last = null;
+        for (var i = 0; i < attempts; i++)
+        {
+            try { return action(); }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                last = ex;
+                Thread.Sleep(delayMs);
+            }
+        }
+        throw last ?? new IOException("文件操作重试失败");
+    }
+
+    /// <summary>
+    /// 轮询等待条件成立（用于文件校验重试：校验因瞬时锁返回失败时持续重试）。
+    /// </summary>
+    private static bool WaitUntil(Func<bool> condition, int attempts = 12, int delayMs = 500)
+    {
+        for (var i = 0; i < attempts; i++)
+        {
+            if (condition()) return true;
+            Thread.Sleep(delayMs);
+        }
+        return condition();
     }
 
     /// <summary>验证文件 SHA256 哈希</summary>

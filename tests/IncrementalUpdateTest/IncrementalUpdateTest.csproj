@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>false</UseWindowsForms>
+    <AssemblyName>IncrementalUpdateTest</AssemblyName>
+    <RootNamespace>IncrementalUpdateTest</RootNamespace>
+    <!-- 引用的 LightGuard 是 self-contained 可执行文件，测试项目必须同步 -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 引用真实 LightGuard 代码，验证 IncrementalUpdateService 实际逻辑 -->
+    <ProjectReference Include="..\..\src\LightGuard\LightGuard.csproj" />
+  </ItemGroup>
+
+</Project>
