@@ -1,0 +1,60 @@
+{
+  "Resources": [
+    {
+      "Name": "lang-zh-CN",
+      "Category": "Language",
+      "Path": "Resources/lang/lang_zh-CN.json",
+      "Required": false,
+      "MaxSizeMB": 1
+    },
+    {
+      "Name": "lang-en-US",
+      "Category": "Language",
+      "Path": "Resources/lang/lang_en-US.json",
+      "Required": true,
+      "MaxSizeMB": 1
+    },
+    {
+      "Name": "lang-zh-TW",
+      "Category": "Language",
+      "Path": "Resources/lang/lang_zh-TW.json",
+      "Required": false,
+      "MaxSizeMB": 1
+    },
+    {
+      "Name": "yara-rules",
+      "Category": "YaraRule",
+      "Path": "Resources/yara-rules/",
+      "Required": true,
+      "MaxSizeMB": 5
+    },
+    {
+      "Name": "adblock-rules",
+      "Category": "AdBlockRule",
+      "Path": "Resources/adblock/",
+      "Required": false,
+      "MaxSizeMB": 2
+    },
+    {
+      "Name": "decryptor-index",
+      "Category": "DecryptorIndex",
+      "Path": "Decryption/DecryptionToolIndex.json",
+      "Required": false,
+      "MaxSizeMB": 1
+    },
+    {
+      "Name": "defender-tools",
+      "Category": "Tool",
+      "Path": "Resources/tools/defender/",
+      "Required": false,
+      "MaxSizeMB": 50
+    },
+    {
+      "Name": "server-config",
+      "Category": "Config",
+      "Path": "Resources/config/server.json",
+      "Required": false,
+      "MaxSizeMB": 1
+    }
+  ]
+}

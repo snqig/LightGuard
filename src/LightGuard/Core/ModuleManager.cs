@@ -54,6 +54,8 @@ public sealed class ModuleManager : IDisposable
         Register(new Modules.SmbAuditModule(appState));
         Register(new Modules.AuditLogModule(appState));
         Register(new Modules.UpdateModule(appState));
+        Register(new Modules.CloudUpdateModule(appState));
+        Register(new Modules.RuleUpdateModule(appState));
     }
 
     private void Register(IModule module)

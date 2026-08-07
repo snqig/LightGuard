@@ -27,6 +27,9 @@ public sealed class AppConfig
     /// <summary>更新配置</summary>
     public UpdateConfig Update { get; set; } = new();
 
+    /// <summary>云端规则更新配置</summary>
+    public CloudUpdateConfig CloudUpdate { get; set; } = new();
+
     /// <summary>防火墙配置</summary>
     public FirewallConfig Firewall { get; set; } = new();
 
@@ -50,6 +53,12 @@ public sealed class AppConfig
 
     /// <summary>是否启用服务器模式（强制英文审计日志，精简UI）</summary>
     public bool ServerLogMode { get; set; } = false;
+
+    /// <summary>主窗口位置与尺寸（P1-4 窗口布局记忆，格式 "x,y,width,height"）</summary>
+    public string WindowBounds { get; set; } = "";
+
+    /// <summary>主窗口是否最大化（P1-4 窗口布局记忆）</summary>
+    public bool WindowMaximized { get; set; }
 
     public bool IsModuleEnabled(string moduleId)
     {
@@ -89,6 +98,9 @@ public sealed class BackupConfig
     public string WebDavPassword { get; set; } = "";
     public bool DisguiseAsSysFile { get; set; } = true;
     public List<string> ProtectedFolders { get; set; } = new();
+
+    /// <summary>备份前自动查杀源文件（P1-6 联动：恶意文件跳过备份）</summary>
+    public bool ScanBeforeBackup { get; set; } = true;
 }
 
 public enum BackupMode { Full, Incremental }
@@ -102,6 +114,40 @@ public sealed class UpdateConfig
     public string VirusDbUpdateUrl { get; set; } = "";
     public DateTime? LastVirusDbUpdate { get; set; }
     public DateTime? LastEngineUpdate { get; set; }
+
+    /// <summary>是否启用规则云端自动更新</summary>
+    public bool AutoUpdateRules { get; set; } = true;
+
+    /// <summary>规则检查间隔（小时）</summary>
+    public int RuleCheckIntervalHours { get; set; } = 6;
+
+    /// <summary>规则更新服务器地址（指向规则仓库根目录）</summary>
+    public string RuleUpdateServerUrl { get; set; } = "https://raw.githubusercontent.com/snqig/LightGuard-rules/main";
+
+    /// <summary>最后规则检查时间</summary>
+    public DateTime? LastRuleCheck { get; set; }
+
+    /// <summary>各规则类型已安装版本号（键为 RuleType 枚举名，值为版本号）</summary>
+    public Dictionary<string, string> InstalledRuleVersions { get; set; } = new();
+}
+
+/// <summary>云端规则更新配置</summary>
+public sealed class CloudUpdateConfig
+{
+    /// <summary>是否启用云端规则更新</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>更新通道（Stable / Beta / Nightly）</summary>
+    public string Channel { get; set; } = "Stable";
+
+    /// <summary>检查间隔（小时，默认 12）</summary>
+    public int CheckIntervalHours { get; set; } = 12;
+
+    /// <summary>服务器地址（为空则使用默认地址）</summary>
+    public string ServerUrl { get; set; } = "https://update.lightguard.app/v1";
+
+    /// <summary>是否自动应用更新（关闭后仅检查不应用）</summary>
+    public bool AutoApply { get; set; } = true;
 }
 
 /// <summary>防火墙配置</summary>

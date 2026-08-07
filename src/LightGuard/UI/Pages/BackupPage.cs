@@ -5,6 +5,7 @@ using System.Reflection;
 using LightGuard.Backup;
 using LightGuard.Core;
 using LightGuard.Database;
+using LightGuard.Defender;
 using LightGuard.Modules;
 using LightGuard.Recovery;
 using LightGuard.UI.Controls;
@@ -612,12 +613,32 @@ public class BackupPage : Page
             var executor = _encBackupModule.Executor;
             BackupManifest? manifest = null;
 
+            // P1-6：备份前自动查杀源文件（恶意文件跳过备份）— 仅目录备份启用
+            HashSet<string>? maliciousFiles = null;
+            if (typeIdx == 1 && AppState.Config.Backup.ScanBeforeBackup && !string.IsNullOrEmpty(source))
+            {
+                if (_backupProgressLabel != null)
+                {
+                    _backupProgressLabel.Text = "备份前查杀源文件（Defender）...";
+                    _backupProgressLabel.ForeColor = Theme.Warning;
+                }
+                maliciousFiles = await DefenderIntegrationService.CollectMaliciousFilesAsync(source);
+                if (maliciousFiles.Count > 0)
+                {
+                    if (_backupProgressLabel != null)
+                    {
+                        _backupProgressLabel.Text = $"已跳过 {maliciousFiles.Count} 个恶意文件";
+                        _backupProgressLabel.ForeColor = Theme.Warning;
+                    }
+                }
+            }
+
             await Task.Run(() =>
             {
                 manifest = typeIdx switch
                 {
                     0 => executor.BackupSingleFile(source, password, destDir, _backupProgressTracker),
-                    1 => executor.BackupDirectory(source, password, destDir, null, incremental, null, _backupProgressTracker),
+                    1 => executor.BackupDirectory(source, password, destDir, null, incremental, null, _backupProgressTracker, maliciousFiles),
                     2 => executor.BackupPartition(source, password, destDir, _backupProgressTracker),
                     3 => executor.BackupDisk(int.TryParse(source, out var dn) ? dn : 0, password, destDir, _backupProgressTracker),
                     _ => executor.BackupSingleFile(source, password, destDir, _backupProgressTracker)

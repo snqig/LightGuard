@@ -8,8 +8,8 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        // 高 DPI 适配
-        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        // 高 DPI 适配（P1-4：Per-Monitor DPI V2，manifest 已声明 PerMonitorV2）
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
@@ -36,14 +36,28 @@ internal static class Program
         // 初始化全局状态
         var appState = AppState.Initialize();
 
+        // 检测分发版本（P1-1：双版本分发架构 — MSI 安装版 + 便携版）
+        // 在 AppState 初始化后、多语言系统初始化前执行，确保服务器版本使用英文
+        DistributionProfile.DetectFromEnvironment();
+
         // 初始化多语言系统（P0-3）
         var initialLang = SupportedLanguage.ZhCN;
         var serverMode = false;
         try
         {
-            if (Enum.TryParse<SupportedLanguage>(appState.Config.Language, out var savedLang))
-                initialLang = savedLang;
-            serverMode = appState.Config.ServerLogMode;
+            if (DistributionProfile.IsServerEdition)
+            {
+                // 服务器版本：强制英文界面 + 英文审计日志模式
+                initialLang = SupportedLanguage.EnUS;
+                serverMode = true;
+            }
+            else
+            {
+                // 客户端版本：从用户配置恢复语言偏好
+                if (Enum.TryParse<SupportedLanguage>(appState.Config.Language, out var savedLang))
+                    initialLang = savedLang;
+                serverMode = appState.Config.ServerLogMode;
+            }
         }
         catch { /* 配置读取失败使用默认值 */ }
         LangHelper.Initialize(initialLang, serverMode);

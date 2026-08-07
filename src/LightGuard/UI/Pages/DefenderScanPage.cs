@@ -49,7 +49,7 @@ public class DefenderScanPage : Page
     private ComboBox? _remediationCombo;
     private ToggleSwitch? _autoScanBeforeBackupToggle;
 
-    // 策略状态（内存中，后续接入配置持久化）
+    // 策略状态（持久化到 AppConfig）
     private ProcessPriorityClass _scanPriority = ProcessPriorityClass.Normal;
     private ThreatAction _remediationAction = ThreatAction.Quarantine;
     private bool _autoScanBeforeBackup = true;
@@ -64,8 +64,41 @@ public class DefenderScanPage : Page
     public override void OnShown()
     {
         _module = AppState.Modules.GetModule("defender-scan") as DefenderScanModule;
+        LoadPolicyFromConfig();
         AttachScanner();
         BuildContent();
+        CheckDefenderCompatibility();
+    }
+
+    /// <summary>从配置加载扫描策略（P1-6：策略持久化）</summary>
+    private void LoadPolicyFromConfig()
+    {
+        _autoScanBeforeBackup = AppState.Config.Backup.ScanBeforeBackup;
+        // 扫描优先级 / 处置动作暂用默认值（后续版本扩展持久化字段）
+    }
+
+    /// <summary>
+    /// 兼容性检查：第三方杀毒导致 Defender 禁用时，置灰扫描按钮并提示。
+    /// </summary>
+    private void CheckDefenderCompatibility()
+    {
+        bool available = DefenderIntegrationService.IsAvailable(out var reason, out var detailed);
+        if (available) return;
+
+        ErrorReporter.Log($"Defender 兼容性检查：{detailed}", "WARN");
+        if (_scanPanel == null) return;
+
+        foreach (Control c in _scanPanel.Controls)
+        {
+            if (c is AccentButton ab && ab.Text is "单文件扫描" or "目录扫描" or "快速扫描" or "全盘扫描")
+                ab.Enabled = false;
+        }
+
+        if (_progressStatusLabel != null)
+        {
+            _progressStatusLabel.Text = $"⚠ {reason}";
+            _progressStatusLabel.ForeColor = Theme.Warning;
+        }
     }
 
     /// <summary>订阅扫描助手的进度事件（模块可能被重新启用，需切换订阅对象）</summary>
@@ -696,7 +729,9 @@ public class DefenderScanPage : Page
         _autoScanBeforeBackupToggle.Toggled += (on) =>
         {
             _autoScanBeforeBackup = on;
-            ErrorReporter.Log($"备份前自动查杀: {(on ? "开" : "关")}");
+            AppState.Config.Backup.ScanBeforeBackup = on;
+            ConfigManager.Save(AppState.Config);
+            ErrorReporter.Log($"备份前自动查杀: {(on ? "开" : "关")}（已持久化）");
         };
         card.Controls.Add(_autoScanBeforeBackupToggle);
 
@@ -714,7 +749,7 @@ public class DefenderScanPage : Page
         // 提示
         var tipLabel = new Label
         {
-            Text = "提示：策略当前保存在内存中，重启后恢复默认（配置持久化将在后续版本接入）。",
+            Text = "提示：策略已持久化保存；第三方杀毒导致 Defender 禁用时，扫描按钮将自动置灰。",
             Font = Theme.SmallFont,
             ForeColor = Theme.TextTertiary,
             Location = new Point(16, 150),
@@ -904,6 +939,17 @@ public class DefenderScanPage : Page
 
         // 记录到模块历史
         _module?.RecordScan(result);
+
+        // P1-6：扫描事件完整写入审计日志（支持报表导出）
+        AuditLogSystem.Log(
+            !result.Success ? LogLevel.Error : (result.ThreatsFound > 0 ? LogLevel.Critical : LogLevel.Info),
+            LogCategory.DefenderScan,
+            $"Defender 扫描{(result.Success ? "完成" : "失败")}：{(result.Success ? (result.ThreatsFound > 0 ? $"发现 {result.ThreatsFound} 个威胁" : "未发现威胁") : result.ErrorMessage)}",
+            $"类型={TypeName(result.ScanType)} 目标={result.TargetPath ?? "—"} 耗时={FormatDuration(result.ScanDuration)} 扫描项={result.ScannedItems}");
+
+        // 服务器适配：关闭桌面弹窗，仅留存日志记录
+        if (DistributionProfile.IsServerEdition)
+            return;
 
         if (result.Success && result.ThreatsFound > 0)
             MessageBoxHelper.Warn($"扫描完成，发现 {result.ThreatsFound} 个威胁，请查看结果列表。");

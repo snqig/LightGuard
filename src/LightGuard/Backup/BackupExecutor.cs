@@ -63,21 +63,22 @@ public sealed class BackupExecutor
     /// <param name="incremental">是否增量备份（对比 baseline 文件哈希）。</param>
     /// <param name="baseline">增量基准清单（其 Metadata["FileHashes"] 作为对比依据）。</param>
     /// <param name="progress">进度跟踪器（可选）。</param>
+    /// <param name="skipFiles">跳过文件集合（P1-6：备份前查杀发现的恶意文件跳过备份）。</param>
     /// <returns>备份清单（含本次全量文件哈希映射，可作为下次增量基准）。</returns>
     public BackupManifest BackupDirectory(string dirPath, string password, string destDir,
         string[]? excludePatterns = null, bool incremental = false, BackupManifest? baseline = null,
-        BackupProgress? progress = null)
+        BackupProgress? progress = null, IReadOnlyCollection<string>? skipFiles = null)
     {
         if (!Directory.Exists(dirPath))
             throw new DirectoryNotFoundException("待备份目录不存在：" + dirPath);
 
-        ErrorReporter.Log($"开始目录备份：{dirPath}（增量={incremental}）");
+        ErrorReporter.Log($"开始目录备份：{dirPath}（增量={incremental}，跳过恶意文件={skipFiles?.Count ?? 0}）");
 
         var baselineHashes = incremental && baseline != null
             ? ParseHashMap(baseline.Metadata)
             : null;
 
-        var (archive, fileCount, hashes) = BuildDirectoryArchive(dirPath, excludePatterns, baselineHashes, incremental, progress);
+        var (archive, fileCount, hashes) = BuildDirectoryArchive(dirPath, excludePatterns, baselineHashes, incremental, progress, skipFiles);
 
         var metadata = new Dictionary<string, string>
         {
@@ -357,7 +358,7 @@ public sealed class BackupExecutor
     /// </summary>
     private (byte[] Archive, int FileCount, Dictionary<string, string> Hashes) BuildDirectoryArchive(
         string dirPath, string[]? excludePatterns, Dictionary<string, string>? baselineHashes,
-        bool incremental, BackupProgress? progress)
+        bool incremental, BackupProgress? progress, IReadOnlyCollection<string>? skipFiles = null)
     {
         var entries = new List<(string RelPath, byte[] Data)>();
         var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -373,6 +374,7 @@ public sealed class BackupExecutor
             files = Array.Empty<string>();
         }
 
+        int skippedMalicious = 0;
         foreach (var file in files)
         {
             string relPath;
@@ -388,6 +390,13 @@ public sealed class BackupExecutor
             var fileName = Path.GetFileName(file);
             if (excludePatterns != null && excludePatterns.Any(p => MatchesPattern(relPath, fileName, p)))
                 continue;
+
+            // P1-6：备份前查杀发现的恶意文件跳过备份
+            if (skipFiles != null && skipFiles.Contains(file))
+            {
+                skippedMalicious++;
+                continue;
+            }
 
             byte[] data;
             try
@@ -428,6 +437,9 @@ public sealed class BackupExecutor
                 bw.Write(data);
             }
         }
+
+        if (skippedMalicious > 0)
+            ErrorReporter.Log($"备份前查杀联动：已跳过 {skippedMalicious} 个恶意文件（{dirPath}）", "WARN");
 
         return (ms.ToArray(), entries.Count, hashes);
     }

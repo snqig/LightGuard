@@ -4,6 +4,7 @@ using System.Drawing.Drawing2D;
 using System.Text;
 using LightGuard.Audit;
 using LightGuard.Core;
+using LightGuard.Defender;
 using LightGuard.Modules;
 using LightGuard.UI.Controls;
 
@@ -906,6 +907,36 @@ public class FileServerAuditPage : Page
                 };
                 itemCard.Controls.Add(v);
             }
+
+            // P1-6：SMB 审计日志右键菜单 — 一键查杀目标文件（Defender 联动）
+            var filePath = r.FilePath;
+            var ctx = new ContextMenuStrip();
+            ctx.Items.Add("🔍 Defender 查杀该文件", null, async (s, e) =>
+            {
+                if (string.IsNullOrEmpty(filePath))
+                {
+                    MessageBoxHelper.Warn("该记录无文件路径，无法查杀。");
+                    return;
+                }
+                if (!File.Exists(filePath))
+                {
+                    MessageBoxHelper.Warn("文件已不存在，可能已被移动或删除。");
+                    return;
+                }
+                await DefenderIntegrationService.ScanPathAsync(filePath, false, "SMB审计联动");
+                MessageBoxHelper.Info("Defender 查杀已完成，结果已写入审计日志。");
+            });
+            ctx.Items.Add("打开所在目录", null, (s, e) =>
+            {
+                if (string.IsNullOrEmpty(filePath)) return;
+                var dir = Path.GetDirectoryName(filePath);
+                if (Directory.Exists(dir))
+                    System.Diagnostics.Process.Start("explorer.exe", dir);
+            });
+            itemCard.ContextMenuStrip = ctx;
+            foreach (Control child in itemCard.Controls)
+                child.ContextMenuStrip = ctx;
+
             y += 30;
         }
         return y;

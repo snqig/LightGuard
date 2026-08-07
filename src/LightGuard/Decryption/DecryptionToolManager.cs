@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LightGuard.Core;
+using LightGuard.Defender;
 
 namespace LightGuard.Decryption;
 
@@ -126,6 +127,10 @@ public sealed class DecryptionToolManager : IDisposable
 
             progress?.Report(100);
             ErrorReporter.Log($"[解密工具] 下载完成: {family.Name} -> {destPath} ({downloadedBytes} bytes)");
+
+            // P1-6：解密工具下载完成后自动查杀，防范更新劫持风险
+            await ScanDownloadedToolAsync(family, destPath);
+
             return destPath;
         }
         catch (Exception ex)
@@ -182,6 +187,46 @@ public sealed class DecryptionToolManager : IDisposable
         {
             ErrorReporter.Report(ex, $"SHA256 校验异常: {toolPath}");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// 解密工具下载完成后自动查杀（P1-6 联动：防范更新劫持风险）。
+    /// <para>若扫描发现威胁，说明下载的工具可能已被劫持（即使 SHA256 校验通过），
+    /// 删除可疑文件并记录 Critical 审计日志；服务器模式下仅记录日志。</para>
+    /// </summary>
+    /// <param name="family">勒索家族信息</param>
+    /// <param name="toolPath">下载后的工具文件路径</param>
+    private async Task ScanDownloadedToolAsync(RansomwareFamilyInfo family, string toolPath)
+    {
+        try
+        {
+            var scanner = DefenderIntegrationService.ResolveScanner();
+            if (scanner == null)
+            {
+                ErrorReporter.Log($"[解密工具] Defender 不可用，跳过下载后查杀: {family.Name}", "WARN");
+                return;
+            }
+
+            ErrorReporter.Log($"[解密工具] 对下载的工具执行 Defender 查杀: {family.Name}");
+            var result = await scanner.ScanFileAsync(toolPath, CancellationToken.None);
+
+            // 写入审计日志
+            AuditLogSystem.Log(
+                result.Success && result.ThreatsFound == 0 ? LogLevel.Info : LogLevel.Critical,
+                LogCategory.DefenderScan,
+                $"解密工具下载后查杀：{family.Name} - {(result.Success && result.ThreatsFound == 0 ? "干净" : $"发现 {result.ThreatsFound} 个威胁")}",
+                $"工具={toolPath} 耗时={result.ScanDuration.TotalSeconds:F1}s");
+
+            if (result.Success && result.ThreatsFound > 0)
+            {
+                ErrorReporter.Log($"[解密工具] 下载的工具被 Defender 判定为恶意，已删除：{family.Name} ({toolPath})", "ERROR");
+                try { File.Delete(toolPath); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "解密工具下载后查杀异常");
         }
     }
 

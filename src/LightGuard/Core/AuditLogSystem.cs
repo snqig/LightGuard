@@ -62,7 +62,10 @@ public enum LogCategory
     System,
 
     /// <summary>灾难恢复相关</summary>
-    Recovery
+    Recovery,
+
+    /// <summary>Defender 查杀相关（P1-6 业务联动）</summary>
+    DefenderScan
 }
 
 /// <summary>

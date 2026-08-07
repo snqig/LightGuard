@@ -65,6 +65,9 @@ public class MainForm : Form
         CreatePages();
         ApplyMicaEffect();
 
+        // P1-4：窗口布局记忆 — 恢复上次的位置与尺寸
+        RestoreWindowBounds();
+
         // 订阅主题变更事件
         Theme.ThemeChanged += OnThemeChanged;
 
@@ -213,6 +216,7 @@ public class MainForm : Form
             ("加密备份", "💾", "backup"),
             ("文件审计", "📁", "audit"),
             ("自动更新", "🔄", "update"),
+            ("云端更新", "☁", "cloud-update"),
             ("设置", "⚙", "settings"),
         };
 
@@ -300,6 +304,7 @@ public class MainForm : Form
         _pages["backup"] = new BackupPage(_appState);
         _pages["audit"] = new FileServerAuditPage(_appState);
         _pages["update"] = new UpdatePage(_appState);
+        _pages["cloud-update"] = new CloudUpdatePage(_appState);
         _pages["settings"] = new SettingsPage(_appState);
 
         foreach (var page in _pages.Values)
@@ -384,6 +389,67 @@ public class MainForm : Form
         form.ShowDialog(this);
         _appState.Config.FirstRunCompleted = true;
         ConfigManager.Save(_appState.Config);
+    }
+
+    /// <summary>恢复上次窗口位置与尺寸（P1-4 窗口布局记忆）</summary>
+    private void RestoreWindowBounds()
+    {
+        try
+        {
+            var cfg = _appState.Config;
+            if (!string.IsNullOrEmpty(cfg.WindowBounds))
+            {
+                var parts = cfg.WindowBounds.Split(',');
+                if (parts.Length == 4 &&
+                    int.TryParse(parts[0], out var x) &&
+                    int.TryParse(parts[1], out var y) &&
+                    int.TryParse(parts[2], out var w) &&
+                    int.TryParse(parts[3], out var h))
+                {
+                    // 校验目标位置是否仍在可见的显示器范围内
+                    var rect = new Rectangle(x, y, w, h);
+                    bool visible = Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(rect));
+                    if (visible && w >= MinimumSize.Width && h >= MinimumSize.Height)
+                    {
+                        StartPosition = FormStartPosition.Manual;
+                        Location = new Point(x, y);
+                        Size = new Size(w, h);
+                    }
+                }
+            }
+
+            if (cfg.WindowMaximized)
+                WindowState = FormWindowState.Maximized;
+        }
+        catch
+        {
+            // 布局恢复失败时使用默认位置
+        }
+    }
+
+    /// <summary>保存当前窗口位置与尺寸（P1-4 窗口布局记忆）</summary>
+    private void SaveWindowBounds()
+    {
+        try
+        {
+            var cfg = _appState.Config;
+            if (WindowState == FormWindowState.Maximized)
+            {
+                cfg.WindowMaximized = true;
+                // 最大化状态下记录还原时的 Normal 尺寸
+                cfg.WindowBounds = $"{RestoreBounds.X},{RestoreBounds.Y},{RestoreBounds.Width},{RestoreBounds.Height}";
+            }
+            else
+            {
+                cfg.WindowMaximized = false;
+                cfg.WindowBounds = $"{Location.X},{Location.Y},{Width},{Height}";
+            }
+            ConfigManager.Save(cfg);
+        }
+        catch
+        {
+            // 保存失败不影响退出
+        }
     }
 
     #region 窗口拖拽
@@ -500,6 +566,9 @@ public class MainForm : Form
             _trayIcon.ShowBalloonTip(2000, "LightGuard", "程序已最小化到系统托盘，继续后台防护中。", ToolTipIcon.Info);
             return;
         }
+
+        // P1-4：窗口布局记忆 — 保存窗口位置与尺寸
+        SaveWindowBounds();
 
         _appState.Dispose();
         Theme.ThemeChanged -= OnThemeChanged;

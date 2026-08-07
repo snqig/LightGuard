@@ -1,7 +1,9 @@
 // © 2026 落尘（Luochen） 原创开发 - 保留所有权利
 
+using System.Diagnostics;
 using LightGuard.Core;
 using LightGuard.Core.Interfaces;
+using LightGuard.Defender;
 using LightGuard.Ransomware;
 
 namespace LightGuard.Modules;
@@ -125,6 +127,64 @@ public sealed class EtwYaraModule : ModuleBase
         ErrorReporter.Log(
             $"[EtwYaraModule] 防御告警 #{_alertCount}: {alert}",
             alert.RiskLevel >= RiskLevel.Critical ? "ERROR" : "WARN");
+
+        // P1-6：勒索告警弹窗 — 增加【扫描可疑进程目录】按钮（Defender 联动查杀）
+        // 服务器适配：关闭桌面弹窗，仅留存审计日志
+        if (DistributionProfile.IsServerEdition)
+        {
+            AuditLogSystem.Log(LogLevel.Critical, LogCategory.RansomwareAlert,
+                $"勒索防御告警（服务器模式，仅记录）：{alert.Summary}",
+                alert.ToString());
+            return;
+        }
+
+        // 客户端模式：仅在 UI 线程弹出告警窗（告警本身来自后台线程）
+        var pid = alert.EtwAlert?.ProcessId ?? 0;
+        try
+        {
+            var uiThread = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.Visible);
+            if (uiThread == null || uiThread.IsDisposed)
+                return;
+
+            uiThread.BeginInvoke(() =>
+            {
+                using var dlg = new LightGuard.UI.RansomwareAlertDialog(alert, pid);
+                if (dlg.ShowDialog(uiThread) == DialogResult.OK && dlg.RequestedScan)
+                {
+                    // 用户点击【扫描可疑进程目录】→ 对可疑进程所在目录执行 Defender 按需查杀
+                    var exeDir = GetProcessDirectory(pid);
+                    if (!string.IsNullOrEmpty(exeDir))
+                    {
+                        _ = DefenderIntegrationService.ScanPathAsync(exeDir, true, "勒索告警");
+                    }
+                    else
+                    {
+                        ErrorReporter.Log($"[EtwYaraModule] 无法定位可疑进程目录 PID={pid}", "WARN");
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "勒索告警弹窗异常");
+        }
+    }
+
+    /// <summary>获取进程可执行文件所在目录</summary>
+    private static string? GetProcessDirectory(int pid)
+    {
+        if (pid <= 0) return null;
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            var path = p.MainModule?.FileName;
+            if (string.IsNullOrEmpty(path)) return null;
+            return Path.GetDirectoryName(path);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     #endregion
