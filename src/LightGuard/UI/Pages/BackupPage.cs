@@ -2,6 +2,7 @@
 
 using System.Drawing.Drawing2D;
 using System.Reflection;
+using System.Security.Cryptography;
 using LightGuard.Backup;
 using LightGuard.Core;
 using LightGuard.Database;
@@ -106,6 +107,7 @@ public class BackupPage : Page
     private AccentButton? _browseRecoveryDestBtn;
     private AccentButton? _browseBackupFileBtn;
     private AccentButton? _confirmRestoreBtn;
+    private AccentButton? _browseSelectiveRestoreBtn;
     private Panel? _recoveryProgressBar;
     private Label? _recoveryProgressLabel;
     private Label? _recoveryProgressDetail;
@@ -841,7 +843,7 @@ public class BackupPage : Page
         CreateSectionTitle("恢复配置", 0, y);
         y += 30;
 
-        var configCard = CreateCard(0, y, cw, 150);
+        var configCard = CreateCard(0, y, cw, 200);
 
         // 恢复模式
         var modeLabel = new Label
@@ -956,19 +958,30 @@ public class BackupPage : Page
         _confirmRestoreBtn.Click += ConfirmRestore;
         configCard.Controls.Add(_confirmRestoreBtn);
 
+        // 选择性还原按钮：浏览备份内容并勾选还原
+        _browseSelectiveRestoreBtn = new AccentButton
+        {
+            Text = "浏览并选择还原...",
+            Location = new Point(186, 112),
+            Size = new Size(220, 32)
+        };
+        _browseSelectiveRestoreBtn.Click += async () => await StartSelectiveRestoreAsync();
+        configCard.Controls.Add(_browseSelectiveRestoreBtn);
+
         // 提示
         var hintLabel = new Label
         {
-            Text = "流程：选择备份文件 → 输入解密密码 → 选择恢复目标和模式 → 点击确认恢复",
+            Text = "流程：选择备份文件 → 输入解密密码 → 选择恢复目标和模式 → 确认恢复；\n" +
+                   "选择性还原：点击\"浏览并选择还原...\" → 勾选文件/目录 → 自动按所选恢复",
             Font = Theme.SmallFont,
             ForeColor = Theme.TextTertiary,
-            Location = new Point(190, 118),
-            Size = new Size(cw - 210, 18),
+            Location = new Point(16, 152),
+            Size = new Size(cw - 32, 40),
             BackColor = Color.Transparent
         };
         configCard.Controls.Add(hintLabel);
 
-        y += 160;
+        y += 210;
 
         // ===== 恢复进度 =====
         CreateSectionTitle("恢复进度", 0, y);
@@ -1305,6 +1318,188 @@ public class BackupPage : Page
             });
         }
         catch { }
+    }
+
+    // ==================== 选择性还原（浏览 + 批量恢复） ====================
+
+    /// <summary>格式化字节数显示</summary>
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024 / 1024:F2} GB",
+        >= 1024L * 1024 => $"{bytes / 1024.0 / 1024:F1} MB",
+        >= 1024L => $"{bytes / 1024.0:F1} KB",
+        _ => $"{bytes} B"
+    };
+
+    /// <summary>
+    /// 选择性还原完整流程：解密归档 → 浏览勾选 → 预校验 → （覆盖二次确认）→ 批量还原 → 结果汇总。
+    /// </summary>
+    private async Task StartSelectiveRestoreAsync()
+    {
+        if (_isBusy || _recoveryModule?.Engine == null) return;
+
+        var backupPath = _recoveryFileBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(backupPath))
+        {
+            MessageBoxHelper.Warn("请先选择要恢复的 .lgbackup 备份文件。\n可点击\"浏览选择文件...\"或在下方列表中点击\"选择\"。");
+            return;
+        }
+        if (!File.Exists(backupPath))
+        {
+            MessageBoxHelper.Error($"备份文件不存在：{backupPath}");
+            return;
+        }
+        var password = _recoveryPasswordBox?.Text;
+        if (string.IsNullOrEmpty(password))
+        {
+            MessageBoxHelper.Warn("请输入解密密码。");
+            return;
+        }
+
+        var engine = _recoveryModule.Engine;
+        _isBusy = true;
+        _recoveryModule.NotifyRecoveryState(RecoveryRunState.Running, $"选择性还原：{Path.GetFileName(backupPath)}");
+
+        try
+        {
+            // 1. 解密归档并解析文件清单（进度）
+            RecoveryArchive? archive = null;
+            var loadProgress = new Progress<double>(p => BeginInvoke(() =>
+            {
+                UpdateProgressBar(_recoveryProgressBar, (int)p);
+                if (_recoveryProgressLabel != null)
+                {
+                    _recoveryProgressLabel.Text = $"正在解密并解析备份清单... {p:F0}%";
+                    _recoveryProgressLabel.ForeColor = Theme.Accent;
+                }
+            }));
+            archive = await engine.LoadArchiveEntriesAsync(backupPath, password, loadProgress);
+
+            // 2. 备份内容浏览对话框（目录树 + 文件列表 + 三态勾选）
+            using var browser = new BackupBrowserForm(archive, archive.Manifest, backupPath);
+            if (browser.ShowDialog(this) != DialogResult.OK)
+                return;
+            var selected = browser.SelectedRelPaths;
+            if (selected.Count == 0)
+            {
+                MessageBoxHelper.Warn("未勾选任何文件，已取消选择性还原。");
+                return;
+            }
+
+            // 3. 目标路径与恢复模式
+            var destDir = _recoveryDestBox?.Text?.Trim();
+            if (string.IsNullOrEmpty(destDir))
+            {
+                MessageBoxHelper.Warn("请输入恢复目标目录。");
+                return;
+            }
+            var modeIdx = _recoveryModeCombo?.SelectedIndex ?? 0;
+            var mode = modeIdx switch
+            {
+                0 => RecoveryMode.Isolated,
+                1 => RecoveryMode.Incremental,
+                2 => RecoveryMode.ForceOverwrite,
+                _ => RecoveryMode.Isolated
+            };
+
+            // 4. 预计算选中大小（目录自动递归展开）
+            var (totalSize, fileCount) = engine.CalculateSelectedSize(archive, selected);
+            if (totalSize == 0 || fileCount == 0)
+            {
+                MessageBoxHelper.Warn("所选路径在备份包中未找到任何文件，已取消。");
+                return;
+            }
+
+            // 5. 强制覆盖模式二次确认（隔离/增量无额外弹窗）
+            if (mode == RecoveryMode.ForceOverwrite)
+            {
+                bool confirm = MessageBoxHelper.Confirm(
+                    $"即将以强制覆盖模式还原 {fileCount} 个文件（合计 {FormatSize(totalSize)}）。\n\n" +
+                    $"目标路径：{destDir}\n\n覆盖后原文件不可恢复，确认继续？");
+                if (!confirm) return;
+            }
+
+            // 6. 执行批量选择性还原（进度含速度/剩余时间/文件计数）
+            var result = await engine.RecoverSelectedItemsAsync(
+                archive, archive.Manifest, selected, destDir, mode,
+                new Progress<RecoveryProgressInfo>(OnSelectiveRecoveryProgress));
+
+            // 7. 结果汇总弹窗（成功 / 失败明细）
+            if (result.Success)
+            {
+                UpdateProgressBar(_recoveryProgressBar, 100);
+                SetRecoveryUi("选择性还原完成", Theme.Success);
+                _recoveryModule.NotifyRecoveryState(RecoveryRunState.Succeeded, result.Message);
+                MessageBoxHelper.Info(
+                    $"选择性还原成功！\n\n成功：{result.SuccessCount} 个文件\n跳过：{result.SkippedCount} 个\n" +
+                    $"大小：{FormatSize(result.TotalBytes)}\n耗时：{result.Elapsed.TotalSeconds:F1}s\n\n{result.Message}");
+            }
+            else
+            {
+                SetRecoveryUi("选择性还原完成（有失败项）", Theme.Error);
+                _recoveryModule.NotifyRecoveryState(RecoveryRunState.Failed, result.Message);
+                var failText = string.Join("\n",
+                    result.Failures.Take(20).Select(f => $"  ✗ {f.RelPath}：{f.Error}"));
+                if (result.Failures.Count > 20)
+                    failText += $"\n  ... 等共 {result.Failures.Count} 项失败";
+                MessageBoxHelper.Error(
+                    $"选择性还原完成，但有失败项。\n\n成功：{result.SuccessCount} / 失败：{result.FailCount} / 跳过：{result.SkippedCount}\n\n" +
+                    $"失败明细：\n{failText}");
+            }
+        }
+        catch (AuthenticationTagMismatchException)
+        {
+            _recoveryModule.NotifyRecoveryState(RecoveryRunState.Failed, "密钥错误或备份被篡改");
+            SetRecoveryUi("解密认证失败", Theme.Error);
+            MessageBoxHelper.Error("解密认证失败：密钥错误或备份已被篡改。");
+        }
+        catch (OperationCanceledException)
+        {
+            _recoveryModule.NotifyRecoveryState(RecoveryRunState.Failed, "操作已取消");
+            MessageBoxHelper.Warn("操作已取消。");
+        }
+        catch (Exception ex)
+        {
+            _recoveryModule.NotifyRecoveryState(RecoveryRunState.Failed, ex.Message);
+            SetRecoveryUi("选择性还原失败", Theme.Error);
+            MessageBoxHelper.Error($"选择性还原失败：{ex.Message}");
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    /// <summary>选择性还原进度更新（Progress&lt;T&gt; 已自动封送到 UI 线程）</summary>
+    private void OnSelectiveRecoveryProgress(RecoveryProgressInfo info)
+    {
+        if (IsDisposed) return;
+        try
+        {
+            UpdateProgressBar(_recoveryProgressBar, (int)info.Percent);
+            if (_recoveryProgressLabel != null)
+            {
+                _recoveryProgressLabel.Text = $"选择性还原 {info.Percent:F1}% | {info.ProcessedFiles}/{info.TotalFiles} 文件";
+                _recoveryProgressLabel.ForeColor = Theme.Accent;
+            }
+            if (_recoveryProgressDetail != null)
+            {
+                var speed = $"{FormatSize((long)info.SpeedBytesPerSec)}/s";
+                _recoveryProgressDetail.Text =
+                    $"{info.CurrentFile} | 速度 {speed} | 剩余 {info.RemainingTime:hh\\:mm\\:ss}";
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>设置恢复状态标签文字与颜色</summary>
+    private void SetRecoveryUi(string text, Color color)
+    {
+        if (_recoveryProgressLabel != null)
+        {
+            _recoveryProgressLabel.Text = text;
+            _recoveryProgressLabel.ForeColor = color;
+        }
     }
 
     private void PreviewBackup(string backupPath)

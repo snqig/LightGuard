@@ -93,4 +93,130 @@ public sealed class BackupManifest
     /// <returns>备份清单实例。</returns>
     public static BackupManifest FromJson(string json)
         => JsonSerializer.Deserialize<BackupManifest>(json, JsonOptions) ?? new BackupManifest();
+
+    // ==================== 选择性还原：目录树构建 ====================
+
+    /// <summary>
+    /// 将备份归档中的扁平文件列表转换为层级目录树（选择性还原浏览用）。
+    /// </summary>
+    /// <param name="files">扁平文件列表：(相对路径, 文件大小)。相对路径以 '/' 分隔。</param>
+    /// <param name="timestamp">文件修改时间（.lgbackup 格式未记录逐文件时间，统一取备份时间）。</param>
+    /// <param name="rootName">树根节点名称（默认取源路径文件名）。</param>
+    /// <returns>完整层级目录树，根节点为备份根目录；空目录正常保留。</returns>
+    public BackupTreeNode BuildDirectoryTree(
+        IEnumerable<(string RelPath, long Size)> files,
+        DateTime? timestamp = null,
+        string? rootName = null)
+    {
+        var root = new BackupTreeNode
+        {
+            Name = string.IsNullOrEmpty(rootName)
+                ? (string.IsNullOrEmpty(SourcePath)
+                    ? "backup_root"
+                    : Path.GetFileName(SourcePath.TrimEnd('/', '\\')))
+                : rootName,
+            IsDirectory = true,
+            RelPath = ""
+        };
+
+        // 目录节点索引：父相对路径（"" 为根）→ 节点
+        var dirNodes = new Dictionary<string, BackupTreeNode>(StringComparer.OrdinalIgnoreCase)
+        {
+            [""] = root
+        };
+
+        foreach (var (rel, size) in files)
+        {
+            if (string.IsNullOrWhiteSpace(rel)) continue;
+            var parts = rel.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) continue;
+
+            // 定位 / 创建父目录链
+            var parent = root;
+            var parentRel = "";
+            for (int i = 0; i < parts.Length - 1; i++)
+            {
+                var seg = parts[i];
+                parentRel = parentRel.Length == 0 ? seg : parentRel + "/" + seg;
+                if (!dirNodes.TryGetValue(parentRel, out var dirNode))
+                {
+                    dirNode = new BackupTreeNode
+                    {
+                        Name = seg,
+                        IsDirectory = true,
+                        RelPath = parentRel + "/"
+                    };
+                    parent.Children.Add(dirNode);
+                    dirNodes[parentRel] = dirNode;
+                }
+                parent = dirNode;
+            }
+
+            var leafRel = parentRel.Length == 0 ? parts[^1] : parentRel + "/" + parts[^1];
+            parent.Children.Add(new BackupTreeNode
+            {
+                Name = parts[^1],
+                IsDirectory = false,
+                RelPath = leafRel,
+                FileSize = size,
+                ModifiedTime = timestamp
+            });
+        }
+
+        AccumulateDirSize(root);
+        return root;
+    }
+
+    /// <summary>递归统计目录节点子文件总大小</summary>
+    private static long AccumulateDirSize(BackupTreeNode node)
+    {
+        if (!node.IsDirectory) return node.FileSize;
+        long total = 0;
+        foreach (var child in node.Children)
+            total += AccumulateDirSize(child);
+        node.FileSize = total;
+        return total;
+    }
+}
+
+/// <summary>
+/// 备份内容目录树节点（选择性还原浏览用）。
+/// </summary>
+public sealed class BackupTreeNode
+{
+    /// <summary>节点名称（目录 / 文件名）</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>是否为目录节点</summary>
+    public bool IsDirectory { get; set; }
+
+    /// <summary>相对备份根的路径（目录以 '/' 结尾）</summary>
+    public string RelPath { get; set; } = "";
+
+    /// <summary>子节点集合（目录节点有效）</summary>
+    public List<BackupTreeNode> Children { get; set; } = new();
+
+    /// <summary>文件大小（字节）；目录节点为递归子文件总大小</summary>
+    public long FileSize { get; set; }
+
+    /// <summary>修改时间（.lgbackup 未记录逐文件时间，统一为备份时间）</summary>
+    public DateTime? ModifiedTime { get; set; }
+
+    /// <summary>分片索引引用（预留：后续支持按分片局部读取）</summary>
+    public int ShardIndex { get; set; } = -1;
+
+    /// <summary>是否有子节点</summary>
+    public bool HasChildren => Children.Count > 0;
+
+    /// <summary>节点文件总大小（与 FileSize 一致，便于统一读取）</summary>
+    public long TotalSize => FileSize;
+
+    /// <summary>格式化大小显示</summary>
+    public string SizeText => FileSize switch
+    {
+        >= 1024 * 1024 * 1024 => $"{FileSize / 1024.0 / 1024 / 1024:F2} GB",
+        >= 1024 * 1024 => $"{FileSize / 1024.0 / 1024:F1} MB",
+        >= 1024 => $"{FileSize / 1024.0:F1} KB",
+        _ => $"{FileSize} B"
+    };
 }

@@ -3,6 +3,7 @@
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using LightGuard.Backup;
 using LightGuard.Core;
 
@@ -265,6 +266,337 @@ public sealed class RecoveryEngine
         };
     }
 
+    // ==================== 选择性还原（浏览 + 批量恢复） ====================
+
+    /// <summary>
+    /// 异步加载备份包清单（仅读取头部与清单区块，不解密文件数据体）。
+    /// <para>通过解密首个分片认证标签快速校验密钥正确性：密钥错误抛出 <see cref="AuthenticationTagMismatchException"/>。</para>
+    /// </summary>
+    /// <param name="backupPath">.lgbackup 备份包路径。</param>
+    /// <param name="password">解密口令。</param>
+    /// <param name="progress">进度回调（0-100）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>备份清单。</returns>
+    public Task<BackupManifest> LoadBackupManifestAsync(
+        string backupPath, string password,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        return Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var (manifest, _, _) = LgBackupFormat.ReadManifestOnly(backupPath);
+
+            if (!string.IsNullOrEmpty(password))
+            {
+                var salt = Convert.FromBase64String(manifest.Salt);
+                var crypto = new BackupCryptoEngine(manifest.EncryptedAlgorithm);
+                var key = crypto.DeriveKey(password, salt);
+                ValidateKeyByFirstShard(backupPath, crypto, key);
+            }
+
+            progress?.Report(100);
+            return manifest;
+        }, ct);
+    }
+
+    /// <summary>
+    /// 异步解密备份包归档并解析文件条目（选择性还原浏览的数据源）。
+    /// <para>逐分片解密 + 分片级 SHA256 校验 + 整包哈希校验；条目含归档物理偏移，
+    /// 供批量还原按偏移顺序读取（减少随机 IO）。</para>
+    /// </summary>
+    public Task<RecoveryArchive> LoadArchiveEntriesAsync(
+        string backupPath, string password,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        return Task.Run(() => LoadArchiveEntries(backupPath, password, progress, ct), ct);
+    }
+
+    /// <summary>
+    /// 解密备份包归档并解析文件条目（同步核心实现）。
+    /// </summary>
+    public RecoveryArchive LoadArchiveEntries(
+        string backupPath, string password,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        var (manifest, shards) = LgBackupFormat.ReadBackup(backupPath);
+        var salt = Convert.FromBase64String(manifest.Salt);
+        var crypto = new BackupCryptoEngine(manifest.EncryptedAlgorithm);
+        var key = crypto.DeriveKey(password, salt);
+
+        using var sha = SHA256.Create();
+        using var ms = new MemoryStream();
+        int total = shards.Count;
+        int done = 0;
+        foreach (var s in shards.OrderBy(x => x.Index))
+        {
+            ct.ThrowIfCancellationRequested();
+            // GCM 认证失败抛 AuthenticationTagMismatchException（密钥错误/被篡改）
+            var plain = crypto.Decrypt(s.Cipher, key, s.Nonce, s.Tag);
+
+            // 分片级哈希校验
+            var actualHash = SHA256.HashData(plain);
+            if (!ConstantTimeEquals(actualHash, s.PlainHash))
+                throw new InvalidDataException($"分片 {s.Index} 哈希校验失败，数据可能已损坏。");
+
+            sha.TransformBlock(plain, 0, plain.Length, null, 0);
+            ms.Write(plain, 0, plain.Length);
+            done++;
+            progress?.Report(done * 100.0 / total);
+        }
+        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+
+        // 整包 SHA256 完整性校验
+        var globalHash = Convert.ToHexString(sha.Hash ?? Array.Empty<byte>());
+        if (!string.Equals(globalHash, manifest.GlobalHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("整包 SHA256 完整性校验失败，备份数据已被篡改或损坏。");
+
+        var archiveBytes = ms.ToArray();
+        return new RecoveryArchive(archiveBytes, ParseArchiveEntries(archiveBytes), manifest);
+    }
+
+    /// <summary>
+    /// 预计算选中项的总大小与文件数（目录选中自动递归展开）。
+    /// </summary>
+    /// <returns>(总字节数, 文件数)。</returns>
+    public (long TotalSize, int FileCount) CalculateSelectedSize(
+        RecoveryArchive archive, IReadOnlyCollection<string> selectedPaths)
+    {
+        var selected = ExpandSelection(archive.Entries, selectedPaths);
+        return (selected.Sum(e => e.Length), selected.Count);
+    }
+
+    /// <summary>
+    /// 批量选择性还原（异步）：按选中路径列表还原文件 / 目录。
+    /// <para>目录选中自动递归展开为所有子文件；单文件失败不中断整体任务，
+    /// 全部异常捕获写入结果明细；选中项按归档物理偏移排序顺序写入。</para>
+    /// </summary>
+    /// <param name="archive">已解密归档（由 <see cref="LoadArchiveEntries"/> 获得）。</param>
+    /// <param name="manifest">备份清单。</param>
+    /// <param name="selectedPaths">选中路径列表（相对路径，文件或目录）。</param>
+    /// <param name="destDir">恢复目标目录。</param>
+    /// <param name="mode">恢复模式。</param>
+    /// <returns>批量还原结果（成功/失败明细）。</returns>
+    public Task<RecoveryBatchResult> RecoverSelectedItemsAsync(
+        RecoveryArchive archive, BackupManifest manifest,
+        IReadOnlyCollection<string> selectedPaths, string destDir, RecoveryMode mode,
+        IProgress<RecoveryProgressInfo>? progress = null, CancellationToken ct = default)
+    {
+        return Task.Run(
+            () => RecoverSelectedItems(archive, manifest, selectedPaths, destDir, mode, progress, ct),
+            ct);
+    }
+
+    /// <summary>
+    /// 批量选择性还原（同步核心实现）。
+    /// </summary>
+    public RecoveryBatchResult RecoverSelectedItems(
+        RecoveryArchive archive, BackupManifest manifest,
+        IReadOnlyCollection<string> selectedPaths, string destDir, RecoveryMode mode,
+        IProgress<RecoveryProgressInfo>? progress = null, CancellationToken ct = default)
+    {
+        var result = new RecoveryBatchResult();
+        try
+        {
+            // 1. 展开选中项（目录递归展开为文件）
+            var selected = ExpandSelection(archive.Entries, selectedPaths);
+            if (selected.Count == 0)
+            {
+                result.Message = "所选路径在备份包中未找到任何文件。";
+                return result;
+            }
+
+            // 2. 资源预校验：磁盘空间 + 写入权限（任务启动前拦截，避免半截文件）
+            long totalSize = selected.Sum(e => e.Length);
+            var precheck = PrecheckTarget(destDir, totalSize, mode);
+            if (precheck != null)
+            {
+                result.Message = precheck;
+                return result;
+            }
+
+            // 3. 按归档物理偏移排序（顺序读取，减少随机磁盘 IO）
+            selected = selected.OrderBy(e => e.ArchiveOffset).ToList();
+
+            // 4. 逐个还原（单文件失败容错，不中断整体）
+            long processed = 0;
+            int fileIdx = 0;
+            var startedAt = DateTime.Now;
+            foreach (var entry in selected)
+            {
+                ct.ThrowIfCancellationRequested();
+                fileIdx++;
+                try
+                {
+                    var data = archive.GetEntryData(entry);
+                    var targetDir = ResolveTargetDir(destDir, mode, manifest);
+                    var outPath = Path.Combine(targetDir, entry.RelPath.Replace('/', Path.DirectorySeparatorChar));
+                    var dir = Path.GetDirectoryName(outPath);
+                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+                    int w = WriteFileWithMode(outPath, data, mode, manifest.BackupTime);
+                    if (w > 0)
+                    {
+                        result.SuccessCount++;
+                        result.TotalBytes += data.Length;
+                    }
+                    else
+                    {
+                        result.SkippedCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result.FailCount++;
+                    result.Failures.Add(new RecoveryFailure { RelPath = entry.RelPath, Error = ex.Message });
+                    AuditLogSystem.LogError(LogCategory.SelectiveRecovery,
+                        $"选择性还原失败：{entry.RelPath}", ex.Message);
+                }
+
+                processed += entry.Length;
+                var pct = totalSize > 0 ? processed * 100.0 / totalSize : 100;
+                var elapsed = (DateTime.Now - startedAt).TotalSeconds;
+                var speed = elapsed > 0 ? processed / elapsed : 0;
+                var remainingSec = speed > 0 ? (totalSize - processed) / speed : 0;
+                progress?.Report(new RecoveryProgressInfo
+                {
+                    WriteProgress = pct,
+                    Percent = pct,
+                    CurrentFile = entry.RelPath,
+                    TotalFiles = selected.Count,
+                    ProcessedFiles = fileIdx,
+                    BytesProcessed = processed,
+                    SpeedBytesPerSec = speed,
+                    RemainingTime = TimeSpan.FromSeconds(Math.Max(0, remainingSec))
+                });
+            }
+
+            result.Message = result.FailCount == 0
+                ? $"已还原 {result.SuccessCount} 个文件（跳过 {result.SkippedCount}）"
+                : $"完成：成功 {result.SuccessCount} / 失败 {result.FailCount}（跳过 {result.SkippedCount}）";
+
+            ErrorReporter.Log(
+                $"选择性还原完成：成功 {result.SuccessCount}，跳过 {result.SkippedCount}，失败 {result.FailCount}，" +
+                $"{result.TotalBytes} 字节 -> {destDir}（模式={mode}，耗时 {result.Elapsed.TotalSeconds:F1}s）");
+        }
+        catch (Exception ex)
+        {
+            result.FailCount++;
+            result.Failures.Add(new RecoveryFailure { RelPath = "(任务)", Error = ex.Message });
+            result.Message = $"选择性还原任务异常：{ex.Message}";
+            ErrorReporter.Report(ex, "选择性还原任务异常");
+        }
+        return result;
+    }
+
+    /// <summary>将选中路径列表展开为匹配的归档条目（目录递归展开，忽略大小写，去重）</summary>
+    private static List<RecoveryArchiveEntry> ExpandSelection(
+        IReadOnlyList<RecoveryArchiveEntry> entries, IReadOnlyCollection<string> paths)
+    {
+        var result = new List<RecoveryArchiveEntry>();
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            var p = path.Replace('\\', '/').Trim('/');
+            foreach (var e in entries)
+            {
+                var rel = e.RelPath.Replace('\\', '/');
+                if (string.Equals(rel, p, StringComparison.OrdinalIgnoreCase) ||
+                    rel.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(e);
+                }
+            }
+        }
+        return result
+            .DistinctBy(e => e.RelPath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// 还原前资源预校验：磁盘剩余空间 + 目标写入权限。
+    /// </summary>
+    /// <returns>null 表示通过；否则返回拒绝原因。</returns>
+    internal static string? PrecheckTarget(string destDir, long required, RecoveryMode mode)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(destDir);
+            if (!string.IsNullOrEmpty(root) && root.Contains(':'))
+            {
+                var drive = new DriveInfo(root);
+                if (drive.AvailableFreeSpace < required)
+                {
+                    return $"目标磁盘空间不足：需要 {required / 1024.0 / 1024:F1} MB，" +
+                           $"可用 {drive.AvailableFreeSpace / 1024.0 / 1024:F1} MB。";
+                }
+            }
+
+            // 写入权限探测（在目标或其父目录创建临时文件后删除）
+            var probeBase = Directory.Exists(destDir) ? destDir : Path.GetDirectoryName(destDir);
+            if (!string.IsNullOrEmpty(probeBase) && Directory.Exists(probeBase))
+            {
+                var probe = Path.Combine(probeBase, $".lg_write_probe_{Guid.NewGuid():N}.tmp");
+                File.WriteAllBytes(probe, Array.Empty<byte>());
+                File.Delete(probe);
+            }
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"目标路径无写入权限：{destDir}";
+        }
+        catch (IOException ex)
+        {
+            return $"目标路径不可写：{destDir}（{ex.Message}）";
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Log($"写入权限探测异常，跳过：{ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>通过解密首个分片快速校验密钥正确性（不解密整个数据体）</summary>
+    private static void ValidateKeyByFirstShard(string backupPath, BackupCryptoEngine crypto, byte[] key)
+    {
+        using var fs = new FileStream(backupPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: true);
+        br.ReadBytes(LgBackupFormat.Magic.Length);
+        br.ReadInt32();                    // 版本
+        var manifestLen = br.ReadInt32();
+        br.ReadBytes(manifestLen);         // 跳过清单
+
+        var shard = LgBackupFormat.ReadShardRecord(br, 0);
+        // GCM 认证失败抛 AuthenticationTagMismatchException
+        crypto.Decrypt(shard.Cipher, key, shard.Nonce, shard.Tag);
+    }
+
+    /// <summary>解析归档条目（含数据物理偏移，条目数据按需读取不复制）</summary>
+    private static List<RecoveryArchiveEntry> ParseArchiveEntries(byte[] archive)
+    {
+        var list = new List<RecoveryArchiveEntry>();
+        using var ms = new MemoryStream(archive, false);
+        using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+
+        var count = br.ReadInt64();
+        for (long i = 0; i < count; i++)
+        {
+            var relLen = br.ReadInt32();
+            var rel = Encoding.UTF8.GetString(br.ReadBytes(relLen));
+            var dataOffset = ms.Position;
+            var dataLen = br.ReadInt64();
+            br.ReadBytes((int)dataLen);    // 跳过数据，条目仅保留引用与偏移
+            list.Add(new RecoveryArchiveEntry
+            {
+                RelPath = rel,
+                Name = Path.GetFileName(rel.Replace('/', Path.DirectorySeparatorChar)),
+                ArchiveOffset = dataOffset,
+                Length = dataLen
+            });
+        }
+        return list;
+    }
+
     /// <summary>
     /// 版本回溯：根据时间点查找最近的备份包路径。
     /// </summary>
@@ -426,4 +758,112 @@ public sealed class BackupPreview
 
     /// <summary>原始数据总大小（字节）。</summary>
     public long TotalSize { get; set; }
+}
+
+/// <summary>
+/// 已解密备份归档（选择性还原浏览 / 批量恢复的数据源）。
+/// <para>保留完整明文归档字节，条目仅记录相对路径与物理偏移，
+/// 需要时按偏移读取对应数据，避免全量复制造成双倍内存。</para>
+/// </summary>
+public sealed class RecoveryArchive
+{
+    private readonly byte[] _data;
+
+    /// <summary>归档条目列表（按归档物理顺序）。</summary>
+    public IReadOnlyList<RecoveryArchiveEntry> Entries { get; }
+
+    /// <summary>归档原始数据总大小（字节）。</summary>
+    public long TotalSize { get; }
+
+    /// <summary>对应备份清单（源路径 / 备份时间 / 恢复模式适配用）。</summary>
+    public BackupManifest Manifest { get; }
+
+    internal RecoveryArchive(byte[] data, List<RecoveryArchiveEntry> entries, BackupManifest manifest)
+    {
+        _data = data;
+        Entries = entries;
+        TotalSize = data.LongLength;
+        Manifest = manifest;
+    }
+
+    /// <summary>
+    /// 按条目物理偏移读取文件数据（顺序读取，减少随机磁盘 IO）。
+    /// </summary>
+    public byte[] GetEntryData(RecoveryArchiveEntry entry)
+    {
+        using var ms = new MemoryStream(_data, false);
+        ms.Position = entry.ArchiveOffset;
+        using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+        var dataLen = br.ReadInt64();
+        return br.ReadBytes((int)dataLen);
+    }
+}
+
+/// <summary>
+/// 归档文件条目（相对路径 + 物理偏移，不含数据本体）。
+/// </summary>
+public sealed class RecoveryArchiveEntry
+{
+    /// <summary>相对路径（以 '/' 分隔）。</summary>
+    public string RelPath { get; init; } = "";
+
+    /// <summary>文件名。</summary>
+    public string Name { get; init; } = "";
+
+    /// <summary>文件数据在归档流中的物理偏移（用于顺序读取）。</summary>
+    public long ArchiveOffset { get; init; }
+
+    /// <summary>文件数据长度（字节）。</summary>
+    public long Length { get; init; }
+}
+
+/// <summary>
+/// 批量选择性还原结果（成功 / 失败明细汇总）。
+/// </summary>
+public sealed class RecoveryBatchResult
+{
+    /// <summary>是否整体成功（无失败项）。</summary>
+    public bool Success => FailCount == 0;
+
+    /// <summary>成功还原文件数。</summary>
+    public int SuccessCount { get; set; }
+
+    /// <summary>跳过文件数（增量模式文件未变更等）。</summary>
+    public int SkippedCount { get; set; }
+
+    /// <summary>失败文件数。</summary>
+    public int FailCount { get; set; }
+
+    /// <summary>已还原字节数。</summary>
+    public long TotalBytes { get; set; }
+
+    /// <summary>开始时间。</summary>
+    public DateTime StartedAt { get; } = DateTime.Now;
+
+    /// <summary>结束时间。</summary>
+    public DateTime FinishedAt { get; set; } = DateTime.Now;
+
+    /// <summary>总耗时。</summary>
+    public TimeSpan Elapsed => FinishedAt - StartedAt;
+
+    /// <summary>失败明细（相对路径 + 错误信息）。</summary>
+    public List<RecoveryFailure> Failures { get; } = new();
+
+    /// <summary>结果消息。</summary>
+    public string Message { get; set; } = "";
+
+    /// <summary>选中文件总数（含跳过与失败）。</summary>
+    public int TotalSelected => SuccessCount + SkippedCount + FailCount;
+}
+
+/// <summary>
+/// 单个文件还原失败明细。
+/// </summary>
+public sealed class RecoveryFailure
+{
+    /// <summary>失败文件相对路径。</summary>
+    public string RelPath { get; init; } = "";
+
+    /// <summary>错误信息。</summary>
+    public string Error { get; init; } = "";
 }

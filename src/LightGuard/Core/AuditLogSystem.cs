@@ -65,7 +65,10 @@ public enum LogCategory
     Recovery,
 
     /// <summary>Defender 查杀相关（P1-6 业务联动）</summary>
-    DefenderScan
+    DefenderScan,
+
+    /// <summary>选择性还原相关（浏览 / 批量恢复）</summary>
+    SelectiveRecovery
 }
 
 /// <summary>

@@ -42,4 +42,16 @@ public sealed class RecoveryProgressInfo
 
     /// <summary>当前正在处理的文件。</summary>
     public string CurrentFile { get; set; } = string.Empty;
+
+    /// <summary>选中文件总数（选择性还原用）。</summary>
+    public int TotalFiles { get; set; }
+
+    /// <summary>已完成文件数（选择性还原用）。</summary>
+    public int ProcessedFiles { get; set; }
+
+    /// <summary>已处理字节数（选择性还原用，用于计算速度）。</summary>
+    public long BytesProcessed { get; set; }
+
+    /// <summary>实时传输速度（字节/秒，选择性还原用）。</summary>
+    public double SpeedBytesPerSec { get; set; }
 }
