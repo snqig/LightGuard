@@ -54,3 +54,10 @@ logs/
 data/
 virusdb/
 updates/
+
+# ===== Packaging outputs =====
+build/
+dist/
+packaging/wix/*.wxs
+*.wixpdb
+*.msi
