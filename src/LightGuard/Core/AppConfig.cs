@@ -129,6 +129,12 @@ public sealed class UpdateConfig
 
     /// <summary>各规则类型已安装版本号（键为 RuleType 枚举名，值为版本号）</summary>
     public Dictionary<string, string> InstalledRuleVersions { get; set; } = new();
+
+    /// <summary>增量差分更新清单地址（P1-3：软件本体增量更新）</summary>
+    public string IncrementalUpdateUrl { get; set; } = "";
+
+    /// <summary>最后增量更新检查时间</summary>
+    public DateTime? LastIncrementalCheck { get; set; }
 }
 
 /// <summary>云端规则更新配置</summary>

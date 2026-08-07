@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using LightGuard.Core;
 using LightGuard.Core.Interfaces;
 using LightGuard.Security;
+using LightGuard.Update;
 
 namespace LightGuard.Modules;
 
@@ -188,6 +189,9 @@ public sealed class UpdateModule : ModuleBase
     /// <summary>更新检查定时器</summary>
     private System.Threading.Timer? _checkTimer;
 
+    /// <summary>增量差分更新服务（P1-3：软件本体增量更新）</summary>
+    private IncrementalUpdateService? _incrementalService;
+
     /// <summary>更新文件存储目录</summary>
     private readonly string _updateDir;
 
@@ -233,6 +237,9 @@ public sealed class UpdateModule : ModuleBase
         Directory.CreateDirectory(Path.Combine(_updateDir, "rogue-rules"));
         Directory.CreateDirectory(Path.Combine(_updateDir, "engine"));
         Directory.CreateDirectory(Path.Combine(_updateDir, "app"));
+
+        // P1-3：初始化增量差分更新服务
+        _incrementalService = new IncrementalUpdateService(Path.Combine(_updateDir, "app"));
     }
 
     /// <summary>
@@ -324,6 +331,8 @@ public sealed class UpdateModule : ModuleBase
     {
         _checkTimer?.Dispose();
         _checkTimer = null;
+        _incrementalService?.Dispose();
+        _incrementalService = null;
     }
 
     // ==================== 第一层：软件本体增量更新 ====================
@@ -385,6 +394,55 @@ public sealed class UpdateModule : ModuleBase
             UpdateProgress?.Invoke("检查失败", 100);
             return null;
         }
+    }
+
+    // ==================== 第一层：软件本体增量更新（P1-3 差分更新包） ====================
+
+    /// <summary>
+    /// 检查软件本体增量更新（差分更新包）。
+    /// <para>拉取 update-manifest.json 清单，进行版本比对，判断是否可应用差分包。</para>
+    /// </summary>
+    /// <returns>增量更新检查结果</returns>
+    public async Task<IncrementalUpdateCheckResult> CheckIncrementalUpdateAsync()
+    {
+        var config = AppState.Config.Update;
+        var url = config.IncrementalUpdateUrl?.Trim();
+
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return new IncrementalUpdateCheckResult
+            {
+                CurrentVersion = _currentVersion,
+                Error = "未配置增量更新清单地址，请在“自动更新”页面填写 update-manifest.json 地址"
+            };
+        }
+
+        // 更新记录检查时间
+        config.LastIncrementalCheck = DateTime.Now;
+        ConfigManager.Save(AppState.Config);
+
+        return await _incrementalService!.CheckAsync(url, _currentVersion);
+    }
+
+    /// <summary>
+    /// 下载增量差分包（SHA256 + RSA 双重校验）。
+    /// </summary>
+    /// <param name="manifest">增量更新清单</param>
+    /// <returns>差分包本地路径；失败返回 null</returns>
+    public async Task<string?> DownloadIncrementalUpdate(IncrementalUpdateManifest manifest)
+    {
+        return await _incrementalService!.DownloadAsync(manifest);
+    }
+
+    /// <summary>
+    /// 应用增量差分包（备份旧文件 → 替换变更 → 删除多余文件）。
+    /// </summary>
+    /// <param name="packagePath">差分包路径</param>
+    /// <param name="manifest">增量更新清单</param>
+    /// <returns>应用结果</returns>
+    public IncrementalUpdateResult ApplyIncrementalUpdate(string packagePath, IncrementalUpdateManifest manifest)
+    {
+        return _incrementalService!.Apply(packagePath, manifest, AppContext.BaseDirectory);
     }
 
     /// <summary>
@@ -1109,18 +1167,52 @@ public sealed class UpdateModule : ModuleBase
             results.Add(engineResult);
             UpdateCompleted?.Invoke(engineResult);
 
-            // 4. 软件本体更新检查（仅检查，不自动应用）
+            // 4. 软件本体增量更新（仅检查，不自动应用）
             UpdateProgress?.Invoke("检查软件更新...", 90);
-            var manifest = await CheckForAppUpdate();
-            if (manifest != null && CompareVersions(manifest.Version, _currentVersion) > 0)
+            var incResult = await CheckIncrementalUpdateAsync();
+
+            // 增量更新未配置或检查失败时，回退到原有全量清单检查（GitHub Releases）
+            if (incResult.Error != null)
+            {
+                ErrorReporter.Log($"增量更新不可用（{incResult.Error}），回退到全量更新检查", "INFO");
+                var manifest = await CheckForAppUpdate();
+                if (manifest != null && CompareVersions(manifest.Version, _currentVersion) > 0)
+                {
+                    var appResult = new UpdateResult
+                    {
+                        Component = "软件本体",
+                        Success = true,
+                        Message = $"发现新版本 {manifest.Version}（全量更新包），等待用户确认更新",
+                        OldVersion = _currentVersion,
+                        NewVersion = manifest.Version
+                    };
+                    results.Add(appResult);
+                    UpdateCompleted?.Invoke(appResult);
+                }
+                else
+                {
+                    var appResult = new UpdateResult
+                    {
+                        Component = "软件本体",
+                        Success = true,
+                        Message = "软件已是最新版本",
+                        OldVersion = _currentVersion,
+                        NewVersion = _currentVersion
+                    };
+                    results.Add(appResult);
+                }
+            }
+            else if (incResult.HasUpdate)
             {
                 var appResult = new UpdateResult
                 {
                     Component = "软件本体",
                     Success = true,
-                    Message = $"发现新版本 {manifest.Version}，等待用户确认更新",
+                    Message = incResult.CanApplyIncremental
+                        ? $"发现新版本 {incResult.LatestVersion}（差分更新包可用），等待用户确认更新"
+                        : $"发现新版本 {incResult.LatestVersion}（需要全量更新），等待用户确认",
                     OldVersion = _currentVersion,
-                    NewVersion = manifest.Version
+                    NewVersion = incResult.LatestVersion
                 };
                 results.Add(appResult);
                 UpdateCompleted?.Invoke(appResult);
@@ -1452,6 +1544,7 @@ public sealed class UpdateModule : ModuleBase
     public override void Dispose()
     {
         _checkTimer?.Dispose();
+        _incrementalService?.Dispose();
         base.Dispose();
     }
 }

@@ -14,10 +14,15 @@ public class UpdatePage : Page
     private UpdateModule? _module;
     private AccentButton? _checkBtn;
     private AccentButton? _importBtn;
+    private AccentButton? _incCheckBtn;
+    private AccentButton? _incApplyBtn;
     private ToggleSwitch? _autoUpdateToggle;
     private ComboBox? _intervalCombo;
+    private TextBox? _incUrlBox;
     private Label? _progressLabel;
+    private Label? _incStatusLabel;
     private bool _isUpdating;
+    private Update.IncrementalUpdateCheckResult? _lastIncCheck;
 
     public UpdatePage(AppState appState) : base(appState, "自动更新", "三层全自动无感更新：软件本体、杀毒引擎、病毒库+流氓规则库")
     {
@@ -83,6 +88,68 @@ public class UpdatePage : Page
         actionCard.Controls.Add(_importBtn);
 
         y += 80;
+
+        // ===== 软件增量更新区（P1-3 差分更新包） =====
+        CreateSectionTitle("软件增量更新（差分包）", 0, y);
+        y += 30;
+
+        var incCard = CreateCard(0, y, ContentWidth, 76);
+
+        _incCheckBtn = new AccentButton
+        {
+            Text = "检查增量更新",
+            Location = new Point(16, 10),
+            Size = new Size(120, 34)
+        };
+        _incCheckBtn.Click += () => StartIncrementalCheck();
+        incCard.Controls.Add(_incCheckBtn);
+
+        _incApplyBtn = new AccentButton
+        {
+            Text = "下载并应用",
+            Location = new Point(146, 10),
+            Size = new Size(120, 34),
+            Enabled = false
+        };
+        _incApplyBtn.Click += () => StartIncrementalApply();
+        incCard.Controls.Add(_incApplyBtn);
+
+        var incUrlLabel = new Label
+        {
+            Text = "清单地址：",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(286, 10),
+            Size = new Size(64, 18),
+            BackColor = Color.Transparent
+        };
+        incCard.Controls.Add(incUrlLabel);
+
+        _incUrlBox = new TextBox
+        {
+            Text = AppState.Config.Update.IncrementalUpdateUrl,
+            Location = new Point(352, 8),
+            Size = new Size(ContentWidth - 372, 22),
+            Font = Theme.SmallFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "https://…/update-manifest.json（留空使用默认源）"
+        };
+        incCard.Controls.Add(_incUrlBox);
+
+        _incStatusLabel = new Label
+        {
+            Text = "尚未检查增量更新",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(16, 50),
+            Size = new Size(ContentWidth - 32, 18),
+            BackColor = Color.Transparent
+        };
+        incCard.Controls.Add(_incStatusLabel);
+
+        y += 96;
 
         // ===== 更新进度区 =====
         CreateSectionTitle("更新进度", 0, y);
@@ -322,5 +389,162 @@ public class UpdatePage : Page
     public override void RefreshData()
     {
         BuildContent();
+    }
+
+    // ==================== 增量更新（P1-3 差分包） ====================
+
+    /// <summary>检查增量更新（版本比对）</summary>
+    private async void StartIncrementalCheck()
+    {
+        if (_module == null || _isUpdating) return;
+
+        // 保存清单地址配置
+        var url = _incUrlBox?.Text?.Trim() ?? "";
+        AppState.Config.Update.IncrementalUpdateUrl = url;
+        ConfigManager.Save(AppState.Config);
+
+        _isUpdating = true;
+        if (_incCheckBtn != null) _incCheckBtn.Enabled = false;
+        if (_incStatusLabel != null)
+        {
+            _incStatusLabel.Text = "正在检查增量更新...";
+            _incStatusLabel.ForeColor = Theme.Warning;
+        }
+
+        var result = await Task.Run(() => _module.CheckIncrementalUpdateAsync());
+        _lastIncCheck = result;
+
+        _isUpdating = false;
+        if (_incCheckBtn != null) _incCheckBtn.Enabled = true;
+
+        if (result.Error != null)
+        {
+            if (_incStatusLabel != null)
+            {
+                _incStatusLabel.Text = $"检查失败：{result.Error}";
+                _incStatusLabel.ForeColor = Theme.Error;
+            }
+            if (_incApplyBtn != null) _incApplyBtn.Enabled = false;
+            return;
+        }
+
+        if (!result.HasUpdate)
+        {
+            if (_incStatusLabel != null)
+            {
+                _incStatusLabel.Text = $"已是最新版本：{result.CurrentVersion}";
+                _incStatusLabel.ForeColor = Theme.Success;
+            }
+            if (_incApplyBtn != null) _incApplyBtn.Enabled = false;
+            return;
+        }
+
+        if (_incStatusLabel != null)
+        {
+            var applyNote = result.CanApplyIncremental
+                ? "差分更新包可用"
+                : "版本跨度较大，需全量更新（差分包不适用）";
+            _incStatusLabel.Text =
+                $"发现新版本：{result.CurrentVersion} → {result.LatestVersion}（{applyNote}）";
+            _incStatusLabel.ForeColor = Theme.Warning;
+        }
+        if (_incApplyBtn != null) _incApplyBtn.Enabled = result.CanApplyIncremental;
+    }
+
+    /// <summary>下载并应用增量差分包</summary>
+    private async void StartIncrementalApply()
+    {
+        if (_module == null || _isUpdating) return;
+        var manifest = _lastIncCheck?.Manifest;
+        if (manifest == null)
+        {
+            MessageBoxHelper.Warn("请先检查增量更新。");
+            return;
+        }
+
+        if (!MessageBoxHelper.Confirm(
+                $"确认下载并应用 LightGuard {manifest.Version} 增量更新？\n\n" +
+                $"变更文件：新增 {manifest.Added.Count}，修改 {manifest.Modified.Count}，删除 {manifest.Deleted.Count}\n" +
+                $"更新完成后将提示重启程序。"))
+            return;
+
+        _isUpdating = true;
+        if (_incApplyBtn != null) _incApplyBtn.Enabled = false;
+        if (_incCheckBtn != null) _incCheckBtn.Enabled = false;
+        if (_incStatusLabel != null)
+        {
+            _incStatusLabel.Text = "正在下载差分包并校验（SHA256 + RSA）...";
+            _incStatusLabel.ForeColor = Theme.Warning;
+        }
+
+        try
+        {
+            var progress = new Progress<int>(p =>
+            {
+                if (_incStatusLabel != null)
+                    _incStatusLabel.Text = $"下载差分包... {p}%";
+            });
+
+            var packagePath = await Task.Run(() => _module.DownloadIncrementalUpdate(manifest));
+            if (string.IsNullOrEmpty(packagePath))
+            {
+                if (_incStatusLabel != null)
+                {
+                    _incStatusLabel.Text = "差分包下载或校验失败";
+                    _incStatusLabel.ForeColor = Theme.Error;
+                }
+                MessageBoxHelper.Error("差分包下载或校验失败（SHA256 / 数字签名未通过）。");
+                return;
+            }
+
+            if (_incStatusLabel != null)
+            {
+                _incStatusLabel.Text = "校验通过，正在应用差分包...";
+                _incStatusLabel.ForeColor = Theme.Warning;
+            }
+
+            var result = await Task.Run(() =>
+                _module.ApplyIncrementalUpdate(packagePath, manifest));
+
+            if (result.Success)
+            {
+                if (_incStatusLabel != null)
+                {
+                    _incStatusLabel.Text =
+                        $"更新应用成功：{result.OldVersion} → {result.NewVersion}（替换 {result.ReplacedCount}，删除 {result.DeletedCount}）";
+                    _incStatusLabel.ForeColor = Theme.Success;
+                }
+                MessageBoxHelper.Info(
+                    $"LightGuard 增量更新应用成功！\n\n" +
+                    $"版本：{result.OldVersion} → {result.NewVersion}\n" +
+                    $"替换文件：{result.ReplacedCount}\n" +
+                    $"删除文件：{result.DeletedCount}\n\n" +
+                    "请重启程序以完成更新。");
+            }
+            else
+            {
+                if (_incStatusLabel != null)
+                {
+                    _incStatusLabel.Text = $"更新应用失败：{result.Error}";
+                    _incStatusLabel.ForeColor = Theme.Error;
+                }
+                MessageBoxHelper.Error($"增量更新应用失败：{result.Error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_incStatusLabel != null)
+            {
+                _incStatusLabel.Text = $"更新异常：{ex.Message}";
+                _incStatusLabel.ForeColor = Theme.Error;
+            }
+            MessageBoxHelper.Error($"增量更新异常：{ex.Message}");
+        }
+        finally
+        {
+            _isUpdating = false;
+            if (_incApplyBtn != null) _incApplyBtn.Enabled = _lastIncCheck?.CanApplyIncremental == true;
+            if (_incCheckBtn != null) _incCheckBtn.Enabled = true;
+        }
     }
 }
