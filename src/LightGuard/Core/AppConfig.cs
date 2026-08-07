@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using LightGuard.Core.Interfaces;
+using LightGuard.NetworkIsolation;
 
 namespace LightGuard.Core;
 
@@ -38,6 +39,9 @@ public sealed class AppConfig
 
     /// <summary>净化配置</summary>
     public CleanupConfig Cleanup { get; set; } = new();
+
+    /// <summary>商业软件联网隔离配置（Adobe / CorelDRAW 等套件出站阻断）</summary>
+    public SuiteIsolationConfig SuiteIsolation { get; set; } = new();
 
     /// <summary>是否允许后台调度</summary>
     public bool BackgroundSchedulingEnabled { get; set; } = true;
@@ -199,4 +203,16 @@ public sealed class CleanupConfig
     public bool GlobalAutoStartClean { get; set; } = true;
     public DateTime? LastCleaned { get; set; }
     public string? BackupPath { get; set; }
+}
+
+/// <summary>
+/// 商业软件联网隔离配置
+/// </summary>
+public sealed class SuiteIsolationConfig
+{
+    /// <summary>是否启用附加 hosts 域名阻断（可选增强，需要管理员权限）</summary>
+    public bool HostsBlockEnabled { get; set; }
+
+    /// <summary>套件隔离配置列表</summary>
+    public List<SuiteBlockConfig> Suites { get; set; } = new();
 }

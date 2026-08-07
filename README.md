@@ -11,7 +11,7 @@
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/Platform-Win10%2FWin11%2FServer-0078D4)](https://learn.microsoft.com/windows/)
 [![Arch](https://img.shields.io/badge/Arch-x64%2Farm64%2Fx86-orange)](https://learn.microsoft.com/dotnet/core/rid-catalog)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-Proprietary-red)](LICENSE.md)
 [![Release](https://img.shields.io/badge/Release-v2.0-blue)](https://github.com/snqig/LightGuard/releases)
 
 </div>
@@ -436,6 +436,8 @@ dotnet publish src/LightGuard/LightGuard.csproj `
 ## 版权说明
 
 **© 2026 落尘（Luochen） 所有权利保留**
+
+> 本项目为**保留版权的受限分发软件**，**并非 MIT/开源许可证**（仓库内已移除 MIT 徽章，详见 [LICENSE.md](LICENSE.md)）。允许个人开源自用与二次分发，但核心算法与架构的商业化使用、逆向、二次封装售卖均需作者书面授权。
 
 LightGuard 整套软件全部核心架构由落尘 2026 年独立原创研发，原创内容包含但不限于：
 

@@ -9,13 +9,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>3.1.0</Version>
-    <AssemblyVersion>3.1.0.0</AssemblyVersion>
-    <FileVersion>3.1.0.0</FileVersion>
+    <Version>3.2.0</Version>
+    <AssemblyVersion>3.2.0.0</AssemblyVersion>
+    <FileVersion>3.2.0.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
     <Copyright>© 2026 落尘（Luochen）保留所有权利</Copyright>
-    <Description>LightGuard V3.1 全栈安全容灾审计系统 - P1：Defender查杀全业务联动+双版本分发+DPI自适应</Description>
+    <Description>LightGuard V3.2 全栈安全容灾审计系统 - 商业软件网络隔离 + 勒索监控可靠性修复</Description>
     <NeutralLanguage>zh-CN</NeutralLanguage>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>

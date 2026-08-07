@@ -53,6 +53,9 @@ public sealed class EtwBehaviorMonitor : IDisposable
     /// <summary>滑动窗口最大保留时长（秒），超过此时间的记录将被清理</summary>
     private const int SlidingWindowRetentionSec = 60;
 
+    /// <summary>同类告警抑制窗口（5 分钟内同 PID+行为类型不重复告警，更高风险可覆盖）</summary>
+    private static readonly TimeSpan AlertSuppressWindow = TimeSpan.FromMinutes(5);
+
     /// <summary>高价值文件扩展名集合 — 大量修改此类文件视为加密行为</summary>
     private static readonly HashSet<string> HighValueExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -78,7 +81,17 @@ public sealed class EtwBehaviorMonitor : IDisposable
 
     private readonly object _lock = new();
     private readonly Dictionary<int, ProcessBehaviorWindow> _windows = new();
-    private readonly List<int> _alertedPids = new();
+
+    /// <summary>告警去重：按 (PID, 行为类型) 记录上次告警时间与风险等级，避免同进程不同行为的告警被误吞</summary>
+    private readonly Dictionary<(int Pid, BehaviorType Type), AlertStamp> _alerted = new();
+
+    /// <summary>WMI 降级扫描 I/O 基线（PID → 写入操作数/字节数），用于增量对比与性能优化</summary>
+    private readonly Dictionary<int, (ulong WriteOps, ulong WriteBytes)> _ioBaseline = new();
+
+    /// <summary>ETW 事件解析统计（用于评估解析覆盖率）</summary>
+    private long _totalEvents;
+    private long _unparsedEvents;
+    private DateTime _lastParseStatsLog = DateTime.MinValue;
 
     private FileIoEventListener? _etwListener;
     private ManagementEventWatcher? _processStartWatcher;
@@ -182,7 +195,8 @@ public sealed class EtwBehaviorMonitor : IDisposable
         lock (_lock)
         {
             _windows.Clear();
-            _alertedPids.Clear();
+            _alerted.Clear();
+            _ioBaseline.Clear();
         }
 
         ErrorReporter.Log("[EtwBehaviorMonitor] 行为监控引擎已停止");
@@ -193,24 +207,29 @@ public sealed class EtwBehaviorMonitor : IDisposable
     #region ETW 事件处理
 
     /// <summary>
-    /// ETW 事件写入回调
+    /// ETW 事件写入回调（provider 感知解析：优先按 PayloadNames 字段名定位，
+    /// 无法解析的事件计入统计并按需限速输出，便于评估解析覆盖率）
     /// </summary>
     private void OnEtwEventWritten(EventWrittenEventArgs eventData)
     {
         if (!_isEnabled || eventData == null) return;
 
+        Interlocked.Increment(ref _totalEvents);
         try
         {
             // 提取事件信息
             var eventName = eventData.EventName ?? "";
             var payload = eventData.Payload;
-            if (payload == null || payload.Count == 0) return;
+            if (payload == null || payload.Count == 0)
+            {
+                MarkUnparsed();
+                return;
+            }
 
-            // 尝试从 payload 中提取文件路径和进程信息
-            string? filePath = null;
-            // 修复：通过 PayloadNames 精确定位 ProcessId 字段，替代恒为 0 的占位逻辑
-            int processId = 0;
             var payloadNames = eventData.PayloadNames;
+
+            // 1) 进程 ID：通过 PayloadNames 精确定位 ProcessId 字段（替代恒为 0 的占位逻辑）
+            int processId = 0;
             if (payloadNames != null)
             {
                 for (int i = 0; i < payloadNames.Count && i < payload.Count; i++)
@@ -226,23 +245,56 @@ public sealed class EtwBehaviorMonitor : IDisposable
                 }
             }
 
-            foreach (var item in payload)
+            // 2) 文件路径：优先按 PayloadNames 字段名（FileName/FilePath/Path/FullPath）解析，
+            //    回退到通用扫描（首个包含路径分隔符的字符串）
+            string? filePath = null;
+            if (payloadNames != null)
             {
-                var str = item?.ToString();
-                if (str != null && str.Length > 2 && (str.Contains('\\') || str.Contains("/")))
+                for (int i = 0; i < payloadNames.Count && i < payload.Count; i++)
                 {
-                    filePath = str;
-                    break;
+                    var pn = payloadNames[i];
+                    if (string.Equals(pn, "FileName", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(pn, "FilePath", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(pn, "Path", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(pn, "FullPath", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var v = payload[i]?.ToString();
+                        if (!string.IsNullOrEmpty(v) && (v.Contains('\\') || v.Contains('/')))
+                        {
+                            filePath = v;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (string.IsNullOrEmpty(filePath))
+            {
+                foreach (var item in payload)
+                {
+                    var str = item?.ToString();
+                    if (str != null && str.Length > 2 && (str.Contains('\\') || str.Contains('/')))
+                    {
+                        filePath = str;
+                        break;
+                    }
                 }
             }
 
-            if (string.IsNullOrEmpty(filePath)) return;
+            if (string.IsNullOrEmpty(filePath))
+            {
+                MarkUnparsed();
+                return;
+            }
 
             // 判断操作类型
             var kind = DetermineOperationKind(eventName);
-            if (kind == FileOperationKind.Unknown) return;
+            if (kind == FileOperationKind.Unknown)
+            {
+                MarkUnparsed();
+                return;
+            }
 
-            // 获取进程 ID（ETW 事件通常包含 ProcessId）
+            // 3) 进程 ID 兜底：通用数字扫描（仅在字段名解析失败时使用）
             if (processId <= 0)
             {
                 foreach (var item in payload)
@@ -255,7 +307,11 @@ public sealed class EtwBehaviorMonitor : IDisposable
                 }
             }
 
-            if (processId <= 0) return;
+            if (processId <= 0)
+            {
+                MarkUnparsed();
+                return;
+            }
 
             RecordFileOperation(processId, filePath, kind);
         }
@@ -263,6 +319,29 @@ public sealed class EtwBehaviorMonitor : IDisposable
         {
             ErrorReporter.Report(ex, "[EtwBehaviorMonitor] ETW 事件处理异常");
         }
+    }
+
+    /// <summary>
+    /// 标记一条无法解析的 ETW 事件，并限速输出解析统计（每 30 秒最多一条）
+    /// </summary>
+    private void MarkUnparsed()
+    {
+        Interlocked.Increment(ref _unparsedEvents);
+
+        var total = Interlocked.Read(ref _totalEvents);
+        if (total < 100) return; // 样本量不足时不做统计输出
+
+        var now = DateTime.Now;
+        lock (_lock)
+        {
+            if ((now - _lastParseStatsLog).TotalSeconds < 30) return;
+            _lastParseStatsLog = now;
+        }
+
+        var unparsed = Interlocked.Read(ref _unparsedEvents);
+        var percent = unparsed * 100 / total;
+        ErrorReporter.Log(
+            $"[EtwBehaviorMonitor] ETW 事件解析统计: 共 {total} 条，未解析 {unparsed} 条（{percent}%）— 建议核查 provider 解析覆盖", "WARN");
     }
 
     /// <summary>
@@ -328,7 +407,10 @@ public sealed class EtwBehaviorMonitor : IDisposable
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "[EtwBehaviorMonitor] 进程启动事件处理异常");
+        }
     }
 
     /// <summary>
@@ -359,7 +441,10 @@ public sealed class EtwBehaviorMonitor : IDisposable
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, $"[EtwBehaviorMonitor] VSS 命令检测异常 PID={processId}");
+        }
 
         return false;
     }
@@ -633,54 +718,84 @@ public sealed class EtwBehaviorMonitor : IDisposable
     #region WMI 降级扫描
 
     /// <summary>
-    /// WMI 降级扫描：当 ETW 不可用时，通过进程 I/O 计数器检测异常行为
+    /// WMI 降级扫描：当 ETW 不可用时，通过进程 I/O 计数器检测异常行为。
+    /// <para>性能优化：单次批量 WMI 查询全部进程 I/O 计数（避免逐进程独立查询的
+    /// CPU/WMI 高负载），并与上次基线做增量对比，仅对显著新增写入的进程记录行为。</para>
     /// </summary>
     private void FallbackProcessIoScan()
     {
         if (!_isEnabled) return;
+        var now = DateTime.Now;
 
         try
         {
-            var processes = Process.GetProcesses();
-            var now = DateTime.Now;
+            // 1) 单次批量查询所有进程 I/O 写入计数（替代 N 次逐进程 WMI 查询）
+            Dictionary<int, (ulong WriteOps, ulong WriteBytes)> ioMap;
+            try
+            {
+                ioMap = QueryAllProcessIoCounters();
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, "[EtwBehaviorMonitor] WMI 批量 I/O 查询失败");
+                return; // 查询失败跳过本轮，避免基于残缺数据误报
+            }
 
-            foreach (var proc in processes)
+            // 2) 枚举进程名（ID→名称映射；进程枚举开销远小于逐进程 WMI 查询）
+            var names = new Dictionary<int, string>();
+            foreach (var proc in Process.GetProcesses())
             {
                 try
                 {
-                    if (proc.Id <= 0) continue;
-                    var name = proc.ProcessName + ".exe";
+                    if (proc.Id > 0) names[proc.Id] = proc.ProcessName + ".exe";
+                }
+                catch { }
+                finally { try { proc.Dispose(); } catch { } }
+            }
+
+            lock (_lock)
+            {
+                foreach (var (pid, (wOps, wBytes)) in ioMap)
+                {
+                    if (!names.TryGetValue(pid, out var name)) continue;
                     if (OfflineVirusDb.IsSystemProcess(name)) continue;
 
-                    // 获取进程 I/O 计数器
-                    var ioCounters = GetProcessIoCounters(proc);
-
-                    // 记录 I/O 操作（作为文件操作的近似信号）
-                    if (ioCounters.HasSignificantIo)
+                    // 3) 增量对比：仅当自上次扫描以来新增写入超过阈值才判定为显著 I/O
+                    //    （首次出现的进程仅记录基线，避免把启动累计计数误判为新增）
+                    if (_ioBaseline.TryGetValue(pid, out var prev))
                     {
-                        // 将 I/O 操作映射为文件操作记录
-                        var fakePath = $@"\\{proc.ProcessName}\io_activity";
-                        RecordFileOperation(proc.Id, fakePath, FileOperationKind.Write);
+                        var dOps = wOps >= prev.WriteOps ? wOps - prev.WriteOps : 0;
+                        var dBytes = wBytes >= prev.WriteBytes ? wBytes - prev.WriteBytes : 0;
+                        if (dOps > 1000 || dBytes > 10 * 1024 * 1024)
+                        {
+                            // 将 I/O 活动映射为文件操作记录（近似信号）
+                            var fakePath = $@"\\{name}\io_activity";
+                            RecordFileOperation(pid, fakePath, FileOperationKind.Write);
+                        }
                     }
+
+                    _ioBaseline[pid] = (wOps, wBytes);
 
                     // 检查已知勒索进程名
                     if (ProcessGuard.IsKnownRansomwareProcess(name))
                     {
                         RaiseAlert(new RansomBehaviorAlert
                         {
-                            ProcessId = proc.Id,
+                            ProcessId = pid,
                             ProcessName = name,
                             BehaviorType = BehaviorType.MassEncryption,
                             RiskLevel = RiskLevel.Critical,
-                            Description = $"检测到已知勒索软件进程：{name} (PID={proc.Id})",
+                            Description = $"检测到已知勒索软件进程：{name} (PID={pid})",
                             DetectedAt = now
                         });
                     }
                 }
-                catch { }
-                finally
+
+                // 4) 清理已退出进程的基线，防止字典无限增长
+                if (_ioBaseline.Count > 2048)
                 {
-                    try { proc.Dispose(); } catch { }
+                    foreach (var pid in _ioBaseline.Keys.Where(k => !names.ContainsKey(k)).ToList())
+                        _ioBaseline.Remove(pid);
                 }
             }
 
@@ -693,40 +808,22 @@ public sealed class EtwBehaviorMonitor : IDisposable
     }
 
     /// <summary>
-    /// 获取进程 I/O 计数器并判断是否有显著 I/O 活动
+    /// 单次 WMI 批量查询所有进程的写入 I/O 计数（SELECT 仅取所需字段）
     /// </summary>
-    private static ProcessIoSnapshot GetProcessIoCounters(Process proc)
+    private static Dictionary<int, (ulong WriteOps, ulong WriteBytes)> QueryAllProcessIoCounters()
     {
-        try
+        var map = new Dictionary<int, (ulong, ulong)>();
+        using var searcher = new ManagementObjectSearcher(
+            "SELECT ProcessId, WriteOperationCount, WriteTransferCount FROM Win32_Process");
+        foreach (var obj in searcher.Get())
         {
-            // 使用 WMI 查询进程 I/O 信息
-            using var searcher = new ManagementObjectSearcher(
-                $"SELECT * FROM Win32_Process WHERE ProcessId = {proc.Id}");
-            foreach (var obj in searcher.Get())
-            {
-                var readOp = Convert.ToUInt64(obj["ReadOperationCount"] ?? 0);
-                var writeOp = Convert.ToUInt64(obj["WriteOperationCount"] ?? 0);
-                var otherOp = Convert.ToUInt64(obj["OtherOperationCount"] ?? 0);
-                var readBytes = Convert.ToUInt64(obj["ReadTransferCount"] ?? 0);
-                var writeBytes = Convert.ToUInt64(obj["WriteTransferCount"] ?? 0);
-
-                // 判定标准：写入操作超过 1000 次或写入字节数超过 10MB
-                var hasSignificantIo = writeOp > 1000 || writeBytes > 10 * 1024 * 1024;
-
-                return new ProcessIoSnapshot
-                {
-                    ReadOperations = readOp,
-                    WriteOperations = writeOp,
-                    OtherOperations = otherOp,
-                    ReadBytes = readBytes,
-                    WriteBytes = writeBytes,
-                    HasSignificantIo = hasSignificantIo
-                };
-            }
+            var pid = Convert.ToInt32(obj["ProcessId"] ?? 0);
+            if (pid <= 0) continue;
+            var wOps = Convert.ToUInt64(obj["WriteOperationCount"] ?? 0);
+            var wBytes = Convert.ToUInt64(obj["WriteTransferCount"] ?? 0);
+            map[pid] = (wOps, wBytes);
         }
-        catch { }
-
-        return new ProcessIoSnapshot();
+        return map;
     }
 
     #endregion
@@ -734,27 +831,44 @@ public sealed class EtwBehaviorMonitor : IDisposable
     #region 告警与清理
 
     /// <summary>
-    /// 触发行为告警
+    /// 触发行为告警。
+    /// <para>去重策略：按 (PID, 行为类型) 去重，5 分钟内同类行为不再重复告警；
+    /// 但同一进程出现<b>不同类型</b>的行为始终允许触发（避免漏报），
+    /// 且抑制窗口内<b>更高风险等级</b>的同类型告警可覆盖触发。</para>
     /// </summary>
     private void RaiseAlert(RansomBehaviorAlert alert)
     {
-        // 避免对同一进程短时间内重复告警
+        var key = (alert.ProcessId, alert.BehaviorType);
+        var now = DateTime.Now;
+        bool shouldFire;
+
         lock (_lock)
         {
-            if (_alertedPids.Contains(alert.ProcessId))
+            // 定期清理过期条目，防止字典无限增长
+            if (_alerted.Count > 256)
             {
-                // 5 分钟内已告警过，跳过（除非是 Critical 级别的新行为类型）
-                return;
+                var expiredKeys = _alerted
+                    .Where(kv => now - kv.Value.Time > AlertSuppressWindow)
+                    .Select(kv => kv.Key)
+                    .ToList();
+                foreach (var k in expiredKeys) _alerted.Remove(k);
             }
-            _alertedPids.Add(alert.ProcessId);
 
-            // 定时清理告警记录（5分钟后可再次告警）
-            _ = Task.Run(async () =>
+            if (_alerted.TryGetValue(key, out var stamp))
             {
-                await Task.Delay(TimeSpan.FromMinutes(5));
-                lock (_lock) { _alertedPids.Remove(alert.ProcessId); }
-            });
+                var expired = now - stamp.Time > AlertSuppressWindow;
+                // 同类行为抑制窗口内：仅当新告警风险等级更高时允许覆盖触发（Critical 新行为不被吞掉）
+                shouldFire = expired || RiskSeverity(alert.RiskLevel) > RiskSeverity(stamp.Risk);
+                if (shouldFire) _alerted[key] = new AlertStamp(now, alert.RiskLevel);
+            }
+            else
+            {
+                _alerted[key] = new AlertStamp(now, alert.RiskLevel);
+                shouldFire = true;
+            }
         }
+
+        if (!shouldFire) return;
 
         ErrorReporter.Log(
             $"[EtwBehaviorMonitor] 勒索行为告警: PID={alert.ProcessId} " +
@@ -764,6 +878,18 @@ public sealed class EtwBehaviorMonitor : IDisposable
 
         BehaviorAlertDetected?.Invoke(alert);
     }
+
+    /// <summary>风险等级数值化（用于“更高风险可覆盖触发”判断）</summary>
+    private static int RiskSeverity(RiskLevel risk) => risk switch
+    {
+        RiskLevel.Critical => 3,
+        RiskLevel.High => 2,
+        RiskLevel.Medium => 1,
+        _ => 0
+    };
+
+    /// <summary>告警时间戳（含风险等级，用于抑制窗口内的覆盖判断）</summary>
+    private sealed record AlertStamp(DateTime Time, RiskLevel Risk);
 
     /// <summary>
     /// 清理已退出进程的滑动窗口
@@ -786,7 +912,10 @@ public sealed class EtwBehaviorMonitor : IDisposable
                     _windows.Remove(pid);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "[EtwBehaviorMonitor] 滑动窗口清理异常");
+        }
     }
 
     #endregion
@@ -829,9 +958,13 @@ internal sealed class FileIoEventListener : EventListener
             {
                 EnableEvents(eventSource, EventLevel.Informational,
                     EventKeywords.All);
+                ErrorReporter.Log($"[EtwBehaviorMonitor] 已订阅事件源: {name}");
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, $"[EtwBehaviorMonitor] 事件源订阅失败: {eventSource.Name}");
+        }
     }
 
     protected override void OnEventWritten(EventWrittenEventArgs eventData)
@@ -840,7 +973,10 @@ internal sealed class FileIoEventListener : EventListener
         {
             OnEvent?.Invoke(eventData);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "[EtwBehaviorMonitor] 事件转发异常");
+        }
     }
 }
 
@@ -947,18 +1083,5 @@ internal sealed record FileOperationTimestamp(
     string FilePath,
     FileOperationKind Kind,
     DateTime Timestamp);
-
-/// <summary>
-/// 进程 I/O 计数器快照（WMI 降级扫描用）
-/// </summary>
-internal sealed class ProcessIoSnapshot
-{
-    public ulong ReadOperations { get; set; }
-    public ulong WriteOperations { get; set; }
-    public ulong OtherOperations { get; set; }
-    public ulong ReadBytes { get; set; }
-    public ulong WriteBytes { get; set; }
-    public bool HasSignificantIo { get; set; }
-}
 
 #endregion

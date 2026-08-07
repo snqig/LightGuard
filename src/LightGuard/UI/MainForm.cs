@@ -210,6 +210,7 @@ public class MainForm : Form
             ("隐私加固", "🔒", "privacy"),
             ("流氓净化", "🧹", "cleanup"),
             ("防火墙", "🌐", "firewall"),
+            ("网络隔离", "🚫", "suite-isolation"),
             ("勒索防护", "🦠", "ransomware"),
             ("勒索解密", "🔓", "decrypt"),
             ("Defender查杀", "🛡", "defender"),
@@ -298,6 +299,7 @@ public class MainForm : Form
         _pages["privacy"] = new PrivacyPage(_appState);
         _pages["cleanup"] = new CleanupPage(_appState);
         _pages["firewall"] = new FirewallPage(_appState);
+        _pages["suite-isolation"] = new SuiteIsolationPage(_appState);
         _pages["ransomware"] = new RansomwarePage(_appState);
         _pages["decrypt"] = new DecryptionPage(_appState);
         _pages["defender"] = new DefenderScanPage(_appState);
