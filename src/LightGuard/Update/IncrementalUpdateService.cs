@@ -45,6 +45,21 @@ public sealed class IncrementalUpdateService : IDisposable
     // ==================== 版本比对 ====================
 
     /// <summary>
+    /// 判断差分包分发形态与当前分发形态是否兼容（P1-1 双版本分发）。
+    /// <para>清单未声明 edition 或声明为 universal 时始终兼容；否则需与当前形态（client/server）一致。</para>
+    /// </summary>
+    /// <param name="manifestEdition">差分包声明的适用形态（client/server/universal/空）</param>
+    /// <param name="currentEdition">当前分发形态（client/server；缺省按 client）</param>
+    /// <returns>是否兼容</returns>
+    public static bool IsEditionCompatible(string? manifestEdition, string? currentEdition)
+    {
+        if (string.IsNullOrWhiteSpace(manifestEdition)) return true;
+        if (string.Equals(manifestEdition, "universal", StringComparison.OrdinalIgnoreCase)) return true;
+        var edition = string.IsNullOrWhiteSpace(currentEdition) ? "client" : currentEdition;
+        return string.Equals(manifestEdition, edition, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// 比较语义化版本号。
     /// <para>返回：&gt;0 表示 v1 &gt; v2；&lt;0 表示 v1 &lt; v2；0 表示相等。</para>
     /// </summary>
@@ -76,8 +91,10 @@ public sealed class IncrementalUpdateService : IDisposable
     /// </summary>
     /// <param name="manifestUrl">清单地址（update-manifest.json）</param>
     /// <param name="currentVersion">当前版本</param>
+    /// <param name="currentEdition">当前分发形态（client / server / universal），用于拒绝不适用的差分包</param>
     /// <returns>检查结果</returns>
-    public async Task<IncrementalUpdateCheckResult> CheckAsync(string manifestUrl, string currentVersion)
+    public async Task<IncrementalUpdateCheckResult> CheckAsync(
+        string manifestUrl, string currentVersion, string? currentEdition = null)
     {
         var result = new IncrementalUpdateCheckResult
         {
@@ -98,6 +115,15 @@ public sealed class IncrementalUpdateService : IDisposable
             if (manifest == null || string.IsNullOrEmpty(manifest.Version))
             {
                 result.Error = "更新清单解析失败或格式无效";
+                return result;
+            }
+
+            // P1-1 双版本分发：差分包适用形态校验（Server 与 Client 文件集不同，防装错）
+            if (!IsEditionCompatible(manifest.Edition, currentEdition))
+            {
+                var edition = string.IsNullOrWhiteSpace(currentEdition) ? "client" : currentEdition;
+                result.Error = $"差分包适用于 {manifest.Edition} 版，当前为 {edition} 版（双版本分发形态不匹配，请获取对应版本的更新包）";
+                ErrorReporter.Log($"增量更新：{result.Error}", "WARN");
                 return result;
             }
 

@@ -23,6 +23,18 @@ public sealed class SmbAuditModule : ModuleBase
     /// <summary>SMB 风险行为识别引擎实例</summary>
     private SmbRiskDetector? _riskDetector;
 
+    /// <summary>审计记录持久化存储（JSONL 按天分片，P1-2）</summary>
+    private AuditLogStorage? _storage;
+
+    /// <summary>风险事件持久化存储（P1-2）</summary>
+    private SmbRiskStore? _riskStore;
+
+    /// <summary>每日保留策略清理定时器（P1-2）</summary>
+    private System.Threading.Timer? _cleanupTimer;
+
+    /// <summary>审计记录保留天数（与 SmbDeployConfig.LogRetentionDays 默认一致）</summary>
+    private const int RetentionDays = 90;
+
     /// <summary>累计审计记录数</summary>
     private int _totalRecords;
 
@@ -63,7 +75,7 @@ public sealed class SmbAuditModule : ModuleBase
     #region 生命周期
 
     /// <summary>
-    /// 初始化审计采集器和风险检测器
+    /// 初始化审计采集器、风险检测器与持久化存储
     /// </summary>
     protected override Task OnInitializeAsync()
     {
@@ -74,26 +86,39 @@ public sealed class SmbAuditModule : ModuleBase
         var backupPaths = AppState.Config.Backup.ProtectedFolders;
         _riskDetector = new SmbRiskDetector(backupPaths);
 
+        // P1-2：审计记录持久化（JSONL 按天分片）
+        var auditDir = Path.Combine(ConfigManager.GetDataDir(), "smb_audit");
+        _storage = new AuditLogStorage(Path.Combine(auditDir, "records"));
+        _riskStore = new SmbRiskStore(Path.Combine(auditDir, "risks"));
+
         // 订阅采集器的审计记录事件
         _collector.AuditEntryRecorded += OnAuditEntryRecorded;
 
         // 订阅风险检测器的事件
         _riskDetector.RiskDetected += OnRiskDetected;
 
-        ErrorReporter.Log("[SmbAuditModule] 初始化完成 | SmbAuditCollector + SmbRiskDetector");
+        ErrorReporter.Log("[SmbAuditModule] 初始化完成 | SmbAuditCollector + SmbRiskDetector + 持久化存储");
 
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// 启动审计采集和风险检测
+    /// 启动审计采集、风险检测与每日保留策略清理
     /// </summary>
     protected override Task OnEnableAsync()
     {
         _riskDetector?.Start();
         _collector?.Start();
 
-        ErrorReporter.Log("[SmbAuditModule] SMB 审计采集与风险检测已启动");
+        // P1-2：启动时清理过期记录 + 每日定时清理
+        TryPurgeRetention();
+        _cleanupTimer = new System.Threading.Timer(
+            callback: _ => TryPurgeRetention(),
+            state: null,
+            dueTime: TimeSpan.FromHours(6),
+            period: TimeSpan.FromDays(1));
+
+        ErrorReporter.Log("[SmbAuditModule] SMB 审计采集与风险检测已启动（含保留策略清理）");
 
         return Task.CompletedTask;
     }
@@ -103,6 +128,9 @@ public sealed class SmbAuditModule : ModuleBase
     /// </summary>
     protected override Task OnDisableAsync()
     {
+        _cleanupTimer?.Dispose();
+        _cleanupTimer = null;
+
         _collector?.Stop();
         _riskDetector?.Stop();
 
@@ -116,6 +144,9 @@ public sealed class SmbAuditModule : ModuleBase
     /// </summary>
     protected override void OnReleaseResources()
     {
+        _cleanupTimer?.Dispose();
+        _cleanupTimer = null;
+
         if (_collector != null)
         {
             _collector.AuditEntryRecorded -= OnAuditEntryRecorded;
@@ -129,6 +160,11 @@ public sealed class SmbAuditModule : ModuleBase
             _riskDetector.Dispose();
             _riskDetector = null;
         }
+
+        _storage?.Dispose();
+        _storage = null;
+        _riskStore?.Dispose();
+        _riskStore = null;
     }
 
     #endregion
@@ -136,18 +172,21 @@ public sealed class SmbAuditModule : ModuleBase
     #region 事件处理
 
     /// <summary>
-    /// 审计记录回调 — 将记录转发给风险检测器
+    /// 审计记录回调 — 持久化 + 转发给风险检测器
     /// </summary>
     private void OnAuditEntryRecorded(SmbAuditEntry entry)
     {
         _totalRecords++;
+
+        // P1-2：异步持久化（映射为存储模型，fire-and-forget，失败不影响采集）
+        PersistEntry(entry);
 
         // 将审计记录转发给风险检测器进行分析
         _riskDetector?.AddEntry(entry);
     }
 
     /// <summary>
-    /// 风险事件回调
+    /// 风险事件回调 — 持久化 + 告警通知
     /// </summary>
     private void OnRiskDetected(SmbRiskEvent riskEvent)
     {
@@ -156,6 +195,57 @@ public sealed class SmbAuditModule : ModuleBase
         ErrorReporter.Log(
             $"[SmbAuditModule] 风险事件 #{_totalRiskEvents}: {riskEvent}",
             riskEvent.Severity >= RiskLevel.Critical ? "ERROR" : "WARN");
+
+        // P1-2：风险事件持久化（跨重启追溯）
+        var risk = riskEvent;
+        Task.Run(async () =>
+        {
+            try { if (_riskStore != null) await _riskStore.StoreAsync(risk); }
+            catch { /* 持久化失败不阻断 */ }
+        });
+
+        // P1-2：告警通知（钉钉/企微 Webhook，配置启用时）
+        _ = AlertNotifier.NotifyAsync(riskEvent.Title, riskEvent.Description, riskEvent.Severity);
+    }
+
+    /// <summary>
+    /// 将采集记录映射为存储模型并异步持久化。
+    /// </summary>
+    private void PersistEntry(SmbAuditEntry entry)
+    {
+        if (_storage == null) return;
+        var evt = new SmbAuditEvent
+        {
+            Timestamp = entry.Time,
+            UserName = entry.UserName,
+            ClientIp = entry.ClientIp,
+            FilePath = entry.FilePath,
+            Action = entry.Operation.ToString(),
+            Result = entry.IsRemote ? "Remote" : "Local",
+            RawEvent = entry.RiskTag
+        };
+        Task.Run(async () =>
+        {
+            try { await _storage.StoreAsync(evt); }
+            catch { /* 持久化失败不阻断采集 */ }
+        });
+    }
+
+    /// <summary>
+    /// 执行保留策略清理（审计记录 + 风险事件，失败静默）。
+    /// </summary>
+    private void TryPurgeRetention()
+    {
+        try
+        {
+            if (_storage != null)
+                _ = _storage.PurgeAsync(RetentionDays);
+            _riskStore?.Purge(RetentionDays);
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "[SmbAuditModule] 保留策略清理异常");
+        }
     }
 
     #endregion
@@ -214,6 +304,33 @@ public sealed class SmbAuditModule : ModuleBase
     public bool ConfigureSecurityPolicy()
     {
         return _collector?.ConfigureSecurityPolicy() ?? false;
+    }
+
+    /// <summary>
+    /// 查询历史审计记录（跨重启持久化数据，P1-2）。
+    /// <para>支持按时间范围 / 用户名 / 文件路径 / 操作类型筛选。</para>
+    /// </summary>
+    public async Task<List<SmbAuditEvent>> QueryHistoricalRecords(AuditQueryFilter? filter = null)
+    {
+        if (_storage == null) return new List<SmbAuditEvent>();
+        return await _storage.QueryAsync(filter ?? new AuditQueryFilter());
+    }
+
+    /// <summary>
+    /// 查询持久化的风险事件历史（跨重启，P1-2），最近 <paramref name="count"/> 条。
+    /// </summary>
+    public async Task<List<SmbRiskEvent>> GetPersistentRiskHistory(int count = 100)
+    {
+        if (_riskStore == null) return new List<SmbRiskEvent>();
+        return await _riskStore.QueryRecentAsync(count);
+    }
+
+    /// <summary>
+    /// 立即执行保留策略清理（审计记录 + 风险事件，P1-2）。
+    /// </summary>
+    public void PurgeRetentionNow()
+    {
+        TryPurgeRetention();
     }
 
     #endregion

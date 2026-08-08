@@ -49,6 +49,9 @@ public sealed class CloudUpdateModule : ModuleBase
             // 从配置加载调度参数
             Scheduler.LoadFromConfig(AppState.Config);
 
+            // P1-3：订阅规则应用事件（YARA 规则同步生效 + 引擎热重载）
+            Client.RuleApplied += OnRuleApplied;
+
             ErrorReporter.Log($"[CloudUpdate] 模块初始化完成 - 服务器: {Client.BaseUrl} | 间隔: {Scheduler.CheckInterval.TotalHours:F1}h | 通道: {Scheduler.Channel}");
         });
     }
@@ -81,8 +84,61 @@ public sealed class CloudUpdateModule : ModuleBase
     /// <inheritdoc/>
     protected override void OnReleaseResources()
     {
+        if (Client != null)
+        {
+            Client.RuleApplied -= OnRuleApplied;
+        }
         Scheduler?.Dispose();
         Client?.Dispose();
+    }
+
+    /// <summary>
+    /// 规则应用成功联动（P1-3）：YARA 勒索规则同步到 YaraEngine 加载目录并热重载。
+    /// <para>CloudUpdateClient 下载目录（cloudupdate/）与 YaraEngine 加载目录（yararules/）不同，
+    /// 必须在此处同步文件 + 签名，并触发引擎热重载使新规则立即生效。</para>
+    /// </summary>
+    private void OnRuleApplied(LightGuard.Core.CloudUpdate.RuleType ruleType, string finalPath, string signature)
+    {
+        try
+        {
+            // 仅 YARA 勒索规则需要联动生效（其余规则由各自消费方按需加载）
+            if (ruleType != LightGuard.Core.CloudUpdate.RuleType.YaraRansomware) return;
+            if (string.IsNullOrEmpty(finalPath) || !File.Exists(finalPath)) return;
+
+            var yaraDir = Path.Combine(ConfigManager.GetDataDir(), "yararules");
+            Directory.CreateDirectory(yaraDir);
+
+            // 同步规则文件到 YaraEngine 加载目录
+            File.Copy(finalPath, Path.Combine(yaraDir, "online_rules.json"), true);
+
+            // 同步签名文件（无签名则清除旧签名，YaraEngine 将直接加载规则文件）
+            var sigPath = Path.Combine(yaraDir, "online_rules.sig");
+            if (!string.IsNullOrEmpty(signature))
+            {
+                File.WriteAllText(sigPath, signature);
+            }
+            else if (File.Exists(sigPath))
+            {
+                File.Delete(sigPath);
+            }
+
+            // 引擎热重载（EtwYaraModule 持有 RansomDefenseEngine）
+            var etw = AppState.Modules.GetModule("etw-yara-defense") as EtwYaraModule;
+            var engine = etw?.GetDefenseEngine()?.GetYaraEngine();
+            if (engine != null)
+            {
+                var loaded = engine.ReloadOnlineRules();
+                ErrorReporter.Log($"[CloudUpdate] YARA 在线规则已同步并热重载：{loaded} 条");
+            }
+            else
+            {
+                ErrorReporter.Log("[CloudUpdate] YARA 规则已同步到 yararules（防御引擎未运行，下次启动生效）");
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "[CloudUpdate] YARA 规则联动失败");
+        }
     }
 
     /// <inheritdoc/>

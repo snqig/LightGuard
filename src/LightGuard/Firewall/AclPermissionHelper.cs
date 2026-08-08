@@ -14,6 +14,9 @@ internal static class AclPermissionHelper
     /// <summary>
     /// 锁定 EXE 文件为只读状态。
     /// 通过 NTFS ACL 拒绝所有用户（Everyone）的修改、写入和删除权限。
+    /// <para>注意：仅拒绝 Write|Delete，保留 Read/Execute——Modify 在 .NET 中
+    /// 包含 ExecuteFile（0x20），拒绝 Modify 会导致 EXE 无法启动
+    /// （Adobe 全家桶封锁后打不开的根因，P1-3 修复）。</para>
     /// </summary>
     /// <param name="exePath">EXE 文件的完整路径。</param>
     /// <returns>成功锁定返回 true；失败返回 false。</returns>
@@ -33,7 +36,7 @@ internal static class AclPermissionHelper
             NTAccount everyone = GetEveryoneIdentity();
             security.AddAccessRule(new FileSystemAccessRule(
                 everyone,
-                FileSystemRights.Write | FileSystemRights.Modify | FileSystemRights.Delete,
+                FileSystemRights.Write | FileSystemRights.Delete,
                 AccessControlType.Deny));
 
             fileInfo.SetAccessControl(security);
@@ -188,7 +191,7 @@ internal static class AclPermissionHelper
             NTAccount everyone = GetEveryoneIdentity();
             security.AddAccessRule(new FileSystemAccessRule(
                 everyone,
-                FileSystemRights.Write | FileSystemRights.Modify | FileSystemRights.Delete,
+                FileSystemRights.Write | FileSystemRights.Delete,
                 AccessControlType.Deny));
 
             fileInfo.SetAccessControl(security);

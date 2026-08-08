@@ -401,10 +401,21 @@ public sealed class UpdateModule : ModuleBase
     /// <summary>
     /// 检查软件本体增量更新（差分更新包）。
     /// <para>拉取 update-manifest.json 清单，进行版本比对，判断是否可应用差分包。</para>
+    /// <para>P1-1 双版本分发：按当前分发形态（client/server）校验差分包适用性；便携版不支持文件级差分。</para>
     /// </summary>
     /// <returns>增量更新检查结果</returns>
     public async Task<IncrementalUpdateCheckResult> CheckIncrementalUpdateAsync()
     {
+        // P1-1：便携版为单 EXE，软件本体更新走全量包替换（GitHub Releases 全量链路）
+        if (DistributionProfile.IsPortable)
+        {
+            return new IncrementalUpdateCheckResult
+            {
+                CurrentVersion = _currentVersion,
+                Error = "便携版（单文件免安装）不支持文件级差分更新，请使用全量更新包"
+            };
+        }
+
         var config = AppState.Config.Update;
         var url = config.IncrementalUpdateUrl?.Trim();
 
@@ -421,7 +432,8 @@ public sealed class UpdateModule : ModuleBase
         config.LastIncrementalCheck = DateTime.Now;
         ConfigManager.Save(AppState.Config);
 
-        return await _incrementalService!.CheckAsync(url, _currentVersion);
+        var edition = DistributionProfile.IsServerEdition ? "server" : "client";
+        return await _incrementalService!.CheckAsync(url, _currentVersion, edition);
     }
 
     /// <summary>
@@ -436,13 +448,67 @@ public sealed class UpdateModule : ModuleBase
 
     /// <summary>
     /// 应用增量差分包（备份旧文件 → 替换变更 → 删除多余文件）。
+    /// <para>P1-1 权限方案A 联动：MSI 版安装在 Program Files，asInvoker 普通权限 UI 无法写入安装目录——
+    /// 非管理员且安装目录不可写时，自动经 PrivilegedWorker 提权应用（免 UAC 计划任务 / runas 回退）。</para>
     /// </summary>
     /// <param name="packagePath">差分包路径</param>
     /// <param name="manifest">增量更新清单</param>
     /// <returns>应用结果</returns>
     public IncrementalUpdateResult ApplyIncrementalUpdate(string packagePath, IncrementalUpdateManifest manifest)
     {
-        return _incrementalService!.Apply(packagePath, manifest, AppContext.BaseDirectory);
+        var appDir = AppContext.BaseDirectory;
+
+        // 安装版（Program Files）+ 非管理员 + 安装目录不可写 → Worker 提权应用
+        if (!DistributionProfile.IsPortable
+            && !PrivilegedWorker.IsAdmin
+            && !IsDirectoryWritable(appDir))
+        {
+            ErrorReporter.Log("安装目录不可写，经高权限 Worker 应用增量更新", "INFO");
+            var spec = new WorkerSpec
+            {
+                Op = "ApplyIncrementalUpdate",
+                Source = packagePath,
+                Dest = appDir,
+                JsonData = JsonSerializer.Serialize(manifest)
+            };
+            var wr = PrivilegedWorker.RunAsync(spec).GetAwaiter().GetResult();
+            return wr.Success
+                ? new IncrementalUpdateResult
+                {
+                    Success = true,
+                    OldVersion = _currentVersion,
+                    NewVersion = manifest.Version,
+                    BackupPath = wr.Detail
+                }
+                : new IncrementalUpdateResult
+                {
+                    Success = false,
+                    OldVersion = _currentVersion,
+                    NewVersion = manifest.Version,
+                    Error = wr.Message
+                };
+        }
+
+        return _incrementalService!.Apply(packagePath, manifest, appDir);
+    }
+
+    /// <summary>
+    /// 探测目录是否可写（写入并删除临时文件；失败返回 false）。
+    /// </summary>
+    private static bool IsDirectoryWritable(string dir)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, $".lg_write_probe_{Guid.NewGuid():N}.tmp");
+            File.WriteAllText(probe, "probe");
+            File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

@@ -12,6 +12,7 @@ param(
     [Parameter(Mandatory)][string]$DiffDir,          # build-diff.ps1 输出目录（含 update.zip / changelog.json / delete.list）
     [string]$TargetVersion = '',                     # 目标版本（默认从 changelog.json 推断则需手动指定）
     [string]$BaseVersion = '',                       # 基准版本
+    [ValidateSet('client', 'server', 'universal')][string]$Edition = 'universal',  # 适用分发形态（P1-1 双版本）
     [string]$DownloadBaseUrl = '',                   # 差分包下载基础 URL（默认与清单同目录）
     [string]$PrivateKeyXml = '',                     # RSA 私钥 XML（可选；提供则签名）
     [string]$ReleaseNotes = '',                      # 发布说明
@@ -53,6 +54,7 @@ $downloadUrl = if ($DownloadBaseUrl.EndsWith('/')) { "$DownloadBaseUrl" + (Split
 $manifest = [ordered]@{
     version       = $TargetVersion
     baseVersion   = $BaseVersion
+    edition       = $Edition
     downloadUrl   = $downloadUrl
     sha256        = $sha
     releaseNotes  = $ReleaseNotes

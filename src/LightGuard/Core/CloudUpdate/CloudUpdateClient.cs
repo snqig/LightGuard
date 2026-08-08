@@ -59,6 +59,12 @@ public sealed class CloudUpdateClient : IDisposable
     /// <summary>进度变化事件（UI 可订阅以显示进度条）</summary>
     public event Action<UpdateProgress>? ProgressChanged;
 
+    /// <summary>
+    /// 规则应用成功事件（P1-3 云端规则更新联动）。
+    /// <para>参数：(规则类型, 应用后文件路径, RSA 签名)。模块订阅后可将规则同步到实际生效位置并热重载引擎。</para>
+    /// </summary>
+    public event Action<RuleType, string, string>? RuleApplied;
+
     #endregion
 
     #region 构造函数
@@ -172,6 +178,15 @@ public sealed class CloudUpdateClient : IDisposable
                 return result;
             }
 
+            // P1-3：客户端版本过旧检查（最低客户端版本要求）
+            var clientVersion = typeof(CloudUpdateClient).Assembly.GetName().Version?.ToString() ?? "1.0.0";
+            if (!IsClientVersionSupported(manifest.MinClientVersion, clientVersion))
+            {
+                result.Error = $"客户端版本过旧（规则清单最低要求 {manifest.MinClientVersion}，当前 {clientVersion}），请先升级 LightGuard";
+                ErrorReporter.Log($"[CloudUpdate] {result.Error}", "WARN");
+                return result;
+            }
+
             var entry = manifest.LatestVersions.FirstOrDefault(v => v.RuleType == ruleType);
             if (entry == null)
             {
@@ -271,6 +286,20 @@ public sealed class CloudUpdateClient : IDisposable
             }
             ErrorReporter.Log($"[CloudUpdate] {ruleType} SHA256 校验通过");
 
+            // 2.5 文件大小校验（防截断 / 防半包）
+            if (version.SizeBytes > 0)
+            {
+                var actualSize = new FileInfo(tempPath).Length;
+                if (actualSize != version.SizeBytes)
+                {
+                    SafeDeleteFile(tempPath);
+                    result.Error = $"文件大小校验失败：清单 {version.SizeBytes} 字节，实际 {actualSize} 字节";
+                    ErrorReporter.Log($"[CloudUpdate] {ruleType} {result.Error}", "ERROR");
+                    RaiseProgress(0, "大小校验失败", false);
+                    return result;
+                }
+            }
+
             // 3. RSA-2048 数字签名校验
             RaiseProgress(75, "RSA 签名校验中...", true);
             if (!await VerifySignatureAsync(tempPath, version.RsaSignature, ""))
@@ -303,6 +332,16 @@ public sealed class CloudUpdateClient : IDisposable
 
             // 6. 更新本地版本记录
             SetLocalVersion(ruleType, version.Version);
+
+            // 7. 触发规则应用事件（供模块联动：同步生效位置 + 引擎热重载）
+            try
+            {
+                RuleApplied?.Invoke(ruleType, finalPath, version.RsaSignature);
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, "[CloudUpdate] 规则应用事件回调异常（不影响更新结果）");
+            }
 
             RaiseProgress(100, $"更新完成: v{version.Version}", false);
             result.Success = true;
@@ -520,6 +559,19 @@ public sealed class CloudUpdateClient : IDisposable
         RuleType.VirusDatabase => "病毒特征数据库",
         _ => ruleType.ToString()
     };
+
+    /// <summary>
+    /// 判断客户端版本是否满足清单的最低版本要求（P1-3）。
+    /// <para>清单未声明最低版本时始终支持；否则当前版本须 &gt;= 最低版本。</para>
+    /// </summary>
+    /// <param name="minClientVersion">清单声明的最低客户端版本（可为空）</param>
+    /// <param name="clientVersion">当前客户端版本</param>
+    /// <returns>是否支持</returns>
+    public static bool IsClientVersionSupported(string? minClientVersion, string clientVersion)
+    {
+        if (string.IsNullOrWhiteSpace(minClientVersion)) return true;
+        return CompareVersions(minClientVersion, clientVersion) <= 0;
+    }
 
     /// <summary>
     /// 比较语义化版本号

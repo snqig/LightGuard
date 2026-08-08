@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DefenderUiProbe</AssemblyName>
+    <RootNamespace>DefenderUiProbe</RootNamespace>
+    <!-- 引用的 LightGuard 是 self-contained 可执行文件，宿主项目必须同步 -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 引用真实 LightGuard 代码，直接承载 DefenderScanPage -->
+    <ProjectReference Include="..\..\src\LightGuard\LightGuard.csproj" />
+  </ItemGroup>
+
+</Project>

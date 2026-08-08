@@ -65,6 +65,9 @@ public class MainForm : Form
         CreatePages();
         ApplyMicaEffect();
 
+        // P1-4：DPI 适配 — 高分屏下放大窗口物理尺寸与整体布局（须在布局记忆恢复之前执行）
+        AdaptToDpi();
+
         // P1-4：窗口布局记忆 — 恢复上次的位置与尺寸
         RestoreWindowBounds();
 
@@ -230,6 +233,8 @@ public class MainForm : Form
                 Size = new Size(Theme.SidebarWidth - 20, 38)
             };
             btn.NavClicked += () => NavigateTo(key);
+            // P0-4 权限方案A：非管理员下高危功能灰化（灰显 + 🔒 且不响应点击）
+            btn.Disabled = !PermissionPolicy.CanAccess(key);
             _navButtons.Add(btn);
             _sidebar.Controls.Add(btn);
             navY += 42;
@@ -262,7 +267,8 @@ public class MainForm : Form
     private void PositionTitleBarButtons()
     {
         if (_titleBar == null || _closeBtn == null || _maxBtn == null || _minBtn == null) return;
-        int btnW = 46;
+        // 使用实际按钮宽度（DPI 缩放后仍能正确排布，避免固定 46 导致缩放后重叠）
+        int btnW = _closeBtn.Width;
         int x = _titleBar.Width - btnW;
         _closeBtn.Location = new Point(x, 0);
         x -= btnW;
@@ -391,6 +397,34 @@ public class MainForm : Form
         form.ShowDialog(this);
         _appState.Config.FirstRunCompleted = true;
         ConfigManager.Save(_appState.Config);
+    }
+
+    /// <summary>
+    /// P1-4 DPI 适配：高分屏（DeviceDpi &gt; 96）下按缩放系数放大窗口物理尺寸与子控件布局。
+    /// <para>PerMonitorV2 感知下窗口物理尺寸不会自动放大，绝对定位布局需整体缩放
+    /// 以避免高分屏下窗口偏小、内容错位；手绘控件文字由 Theme.DpiFont 按 DeviceDpi 放大。</para>
+    /// </summary>
+    private void AdaptToDpi()
+    {
+        try
+        {
+            int dpi = DeviceDpi;
+            if (dpi <= 0) return;
+            float scale = dpi / 96f;
+            if (Math.Abs(scale - 1f) < 0.01f) return;
+
+            MinimumSize = new Size((int)(MinimumSize.Width * scale), (int)(MinimumSize.Height * scale));
+            Size = new Size((int)(Size.Width * scale), (int)(Size.Height * scale));
+
+            // 子控件（标题栏按钮/侧边栏导航/各页面内部）整体成比例缩放
+            Scale(new SizeF(scale, scale));
+
+            ErrorReporter.Log($"[MainForm] DPI 适配：{dpi} DPI（{scale:F2}x），窗口与布局已放大");
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "DPI 适配失败");
+        }
     }
 
     /// <summary>恢复上次窗口位置与尺寸（P1-4 窗口布局记忆）</summary>

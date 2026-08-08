@@ -238,6 +238,9 @@ public sealed class BackupExecutor
 
         progress?.UpdateProgress(fileCount, data.Length, outputPath, false, BackupPhase.Upload);
         ErrorReporter.Log($"数据备份完成：[{type}] {sourcePath} -> {outputPath} | 文件 {fileCount} | 分片 {shards.Count} | {data.Length} 字节 | 算法 {manifest.EncryptedAlgorithm}");
+
+        // WORM：写入完成后自动施加三层防删除锁（抗勒索只读隔离）
+        WormManager.AutoLock(outputPath);
         return manifest;
     }
 
@@ -341,6 +344,9 @@ public sealed class BackupExecutor
 
             progress?.UpdateProgress(shardCount, totalSize, outputPath, false, BackupPhase.Upload);
             ErrorReporter.Log($"流式备份完成：[{type}] {sourcePath} -> {outputPath} | 分片 {shardCount} | {totalSize} 字节 | 算法 {manifest.EncryptedAlgorithm}");
+
+            // WORM：写入完成后自动施加三层防删除锁（抗勒索只读隔离）
+            WormManager.AutoLock(outputPath);
             return manifest;
         }
         finally

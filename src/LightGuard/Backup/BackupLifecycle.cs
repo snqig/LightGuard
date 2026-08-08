@@ -140,6 +140,8 @@ public sealed class BackupLifecycle
                     manifest.IsLocked = locked;
                     var tmp = file + ".tmp";
                     LgBackupFormat.WriteBackup(tmp, manifest, shards);
+                    // WORM：改写清单需先解除文件级三层锁，否则删除/覆盖被 ACL 拒绝
+                    if (WormManager.IsLocked(file)) WormManager.Unlock(file);
                     File.Delete(file);
                     File.Move(tmp, file);
                     ErrorReporter.Log($"备份 {backupId} 锁定状态已设为 {locked}：{file}");
@@ -164,6 +166,13 @@ public sealed class BackupLifecycle
 
         try
         {
+            // WORM：备份文件若已被三层防删除锁锁定，先解锁再删除（否则 ACL 拒绝删除）
+            if (WormManager.IsLocked(item.Path))
+            {
+                WormManager.Unlock(item.Path);
+                ErrorReporter.Log($"清理前已解除 WORM 锁定：{Path.GetFileName(item.Path)}");
+            }
+
             var size = new FileInfo(item.Path).Length;
             File.Delete(item.Path);
             ErrorReporter.Log($"已删除过期备份：{Path.GetFileName(item.Path)}（{item.Manifest.BackupId}），释放 {size / 1024.0:F1} KB");

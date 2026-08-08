@@ -456,6 +456,35 @@ public sealed class YaraEngine : IDisposable
     #region 规则在线更新
 
     /// <summary>
+    /// 热重载在线规则（云端规则更新应用后调用，P1-3 云端规则更新联动）。
+    /// <para>重新读取 yararules/online_rules.json（含签名校验）并合并到当前规则集。</para>
+    /// <returns>本次加载的在线规则条数</returns>
+    public int ReloadOnlineRules()
+    {
+        try
+        {
+            // 先移除旧的在线规则，再重新加载（避免重复累积）
+            lock (_lock)
+            {
+                _rules.RemoveAll(r => r.Source == "在线更新");
+            }
+            LoadOnlineRules();
+            var onlineCount = 0;
+            lock (_lock)
+            {
+                onlineCount = _rules.Count(r => r.Source == "在线更新");
+            }
+            ErrorReporter.Log($"[YaraEngine] 在线规则热重载完成：{onlineCount} 条（版本 {RuleVersion}）");
+            return onlineCount;
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "[YaraEngine] 在线规则热重载异常");
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// 从在线服务器下载并更新 YARA 规则
     /// </summary>
     /// <param name="downloadUrl">规则包下载地址</param>

@@ -16,6 +16,7 @@ public static class Theme
         public static readonly Color SidebarBg = Color.FromArgb(28, 28, 28);          // #1C1C1C
         public static readonly Color CardBg = Color.FromArgb(45, 45, 45);             // #2D2D2D
         public static readonly Color CardHover = Color.FromArgb(55, 55, 55);          // #373737
+        public static readonly Color DisabledBg = Color.FromArgb(40, 40, 40);         // #282828 禁用灰底
         public static readonly Color Border = Color.FromArgb(60, 60, 60);             // #3C3C3C
         public static readonly Color Accent = Color.FromArgb(0, 120, 212);            // #0078D4
         public static readonly Color AccentHover = Color.FromArgb(20, 140, 232);      // #148CE8
@@ -36,6 +37,7 @@ public static class Theme
         public static readonly Color SidebarBg = Color.FromArgb(238, 238, 238);       // #EEEEEE
         public static readonly Color CardBg = Color.FromArgb(255, 255, 255);          // #FFFFFF
         public static readonly Color CardHover = Color.FromArgb(245, 245, 245);       // #F5F5F5
+        public static readonly Color DisabledBg = Color.FromArgb(230, 230, 230);      // #E6E6E6 禁用灰底
         public static readonly Color Border = Color.FromArgb(224, 224, 224);          // #E0E0E0
         public static readonly Color Accent = Color.FromArgb(0, 120, 212);            // #0078D4
         public static readonly Color AccentHover = Color.FromArgb(20, 140, 232);      // #148CE8
@@ -108,6 +110,7 @@ public static class Theme
     public static Color SidebarBg => _isDark ? Dark.SidebarBg : Light.SidebarBg;
     public static Color CardBg => _isDark ? Dark.CardBg : Light.CardBg;
     public static Color CardHover => _isDark ? Dark.CardHover : Light.CardHover;
+    public static Color DisabledBg => _isDark ? Dark.DisabledBg : Light.DisabledBg;
     public static Color Border => _isDark ? Dark.Border : Light.Border;
     public static Color Accent => Dark.Accent;
     public static Color AccentHover => Dark.AccentHover;
@@ -140,6 +143,25 @@ public static class Theme
     public const int ButtonRadius = 6;
     public const int ToggleWidth = 40;
     public const int ToggleHeight = 20;
+
+    // ===== DPI 适配（P1-4） =====
+
+    /// <summary>
+    /// 按控件当前 DPI 缩放字体（高分屏下手绘控件文字保持可读）。
+    /// <para>DPI 感知进程下手绘（GDI+ DrawString）字体不会随系统缩放自动放大，
+    /// 手绘控件在 OnPaint 中应使用本方法按 DeviceDpi 放大字号。</para>
+    /// <para>96 DPI（缩放 1.0）时原样返回，不产生新实例。</para>
+    /// </summary>
+    /// <param name="font">基准字体</param>
+    /// <param name="c">目标控件（读取其 DeviceDpi）</param>
+    /// <returns>缩放后的字体（调用方负责 Dispose）</returns>
+    public static Font DpiFont(Font font, Control c)
+    {
+        if (font == null || c == null) return font;
+        float scale = c.DeviceDpi / 96f;
+        if (Math.Abs(scale - 1f) < 0.01f || scale <= 0f) return font;
+        return new Font(font.FontFamily, font.Size * scale, font.Style);
+    }
 
     // ===== 绘图辅助 =====
 

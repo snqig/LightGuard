@@ -11,6 +11,7 @@ namespace LightGuard.Update;
 /// {
 ///   "version": "3.2.0",          // 目标版本
 ///   "baseVersion": "3.1.0",      // 基准版本（当前版本应等于它才可应用）
+///   "edition": "client",         // 适用分发形态：client / server / universal（P1-1 双版本）
 ///   "downloadUrl": "…/update.zip",// 差分包地址（仅新增+修改文件）
 ///   "sha256": "…",               // update.zip 的 SHA256
 ///   "signature": "…",            // update.zip 的 RSA 签名（Base64）
@@ -30,6 +31,14 @@ public sealed class IncrementalUpdateManifest
     /// <summary>基准版本号（仅当当前版本等于此值时才可应用差分包）</summary>
     [JsonPropertyName("baseVersion")]
     public string BaseVersion { get; set; } = "";
+
+    /// <summary>
+    /// 适用分发形态：client / server / universal。
+    /// <para>Server 版（仅英文语言包）与 Client 版（三语）文件集不同，差分包必须区分；
+    /// universal 表示文件集与分发形态无关（客户端通用）。</para>
+    /// </summary>
+    [JsonPropertyName("edition")]
+    public string Edition { get; set; } = "universal";
 
     /// <summary>差分包下载地址（update.zip，仅含新增+修改文件）</summary>
     [JsonPropertyName("downloadUrl")]

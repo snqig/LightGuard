@@ -70,11 +70,17 @@ public sealed class BackupPermissionLock
     /// <summary>Administrators 组安全标识符（S-1-5-32-544）。</summary>
     private static readonly SecurityIdentifier AdminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
 
-    /// <summary>锁定时对 Everyone 拒绝的权限集合：写入、修改、删除。</summary>
+    /// <summary>
+    /// 锁定时对 Everyone 拒绝的权限集合：写入数据、追加、删除、修改属性/扩展属性。
+    /// <para>注意：不得包含 Modify（Modify 隐含 ReadData），否则 Deny 优先会连读取一起拒绝，
+    /// 导致 LightGuard 自身（含 SYSTEM/管理员）也无法浏览/校验/恢复锁定备份。</para>
+    /// </summary>
     private const FileSystemRights DeniedRights =
         FileSystemRights.Write
-        | FileSystemRights.Modify
-        | FileSystemRights.Delete;
+        | FileSystemRights.AppendData
+        | FileSystemRights.Delete
+        | FileSystemRights.WriteAttributes
+        | FileSystemRights.WriteExtendedAttributes;
 
     /// <summary>目录锁额外拒绝"删除子目录及文件"权限。</summary>
     private const FileSystemRights DeniedDirExtraRights = FileSystemRights.DeleteSubdirectoriesAndFiles;
@@ -312,6 +318,21 @@ public sealed class BackupPermissionLock
             SystemSid, FileSystemRights.Read, inheritance, PropagationFlags.None, AccessControlType.Allow));
         security.AddAccessRule(new FileSystemAccessRule(
             AdminsSid, FileSystemRights.Read, inheritance, PropagationFlags.None, AccessControlType.Allow));
+
+        // Allow：当前交互用户读取（WORM 场景保证 LightGuard 普通权限进程仍可浏览/校验/恢复自己的备份）
+        try
+        {
+            var current = WindowsIdentity.GetCurrent().User;
+            if (current != null && current.Value != EveryoneSid.Value)
+            {
+                security.AddAccessRule(new FileSystemAccessRule(
+                    current, FileSystemRights.Read, inheritance, PropagationFlags.None, AccessControlType.Allow));
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "添加当前用户读取授权失败（不影响锁定生效）。");
+        }
 
         SetSecurity(path, security);
     }

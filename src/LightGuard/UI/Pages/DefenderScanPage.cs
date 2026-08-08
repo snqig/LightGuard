@@ -3,6 +3,7 @@ using System.Diagnostics;
 using LightGuard.Core;
 using LightGuard.Defender;
 using LightGuard.Modules;
+using LightGuard.Security;
 using LightGuard.UI.Controls;
 
 // 消歧义：LightGuard.Modules 命名空间已存在同名 DefenderStatusInfo（FirewallModule 双杀检测用），
@@ -49,10 +50,31 @@ public class DefenderScanPage : Page
     private ComboBox? _remediationCombo;
     private ToggleSwitch? _autoScanBeforeBackupToggle;
 
+    // P1-5 调度策略控件
+    private ToggleSwitch? _scheduleToggle;
+    private ComboBox? _scanTimeCombo;
+    private ComboBox? _scheduleTypeCombo;
+    private ToggleSwitch? _autoSigToggle;
+    private ComboBox? _sigMaxAgeCombo;
+    private ToggleSwitch? _alertThreatToggle;
+    private ToggleSwitch? _alertProtectionToggle;
+
+    // 历史页威胁清单
+    private ListView? _threatListLv;
+
     // 策略状态（持久化到 AppConfig）
     private ProcessPriorityClass _scanPriority = ProcessPriorityClass.Normal;
     private ThreatAction _remediationAction = ThreatAction.Quarantine;
     private bool _autoScanBeforeBackup = true;
+
+    // P1-5 调度策略状态（持久化到 AppConfig.Defender）
+    private bool _scheduleEnabled = true;
+    private string _scanTime = "02:30";
+    private string _scheduleScanType = "QuickScan";
+    private bool _autoUpdateSignatures = true;
+    private int _sigMaxAgeDays = 3;
+    private bool _alertOnThreat = true;
+    private bool _alertOnProtectionDisabled = true;
 
     private const int TabBarHeight = 38;
 
@@ -70,11 +92,50 @@ public class DefenderScanPage : Page
         CheckDefenderCompatibility();
     }
 
-    /// <summary>从配置加载扫描策略（P1-6：策略持久化）</summary>
+    /// <summary>从配置加载扫描策略（P1-5：优先级/处置动作/调度/告警全量持久化）</summary>
     private void LoadPolicyFromConfig()
     {
         _autoScanBeforeBackup = AppState.Config.Backup.ScanBeforeBackup;
-        // 扫描优先级 / 处置动作暂用默认值（后续版本扩展持久化字段）
+
+        var cfg = AppState.Config.Defender;
+        _scanPriority = cfg.ScanPriority == 1 ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal;
+        _remediationAction = cfg.ThreatAction switch
+        {
+            "Remove" => ThreatAction.Remove,
+            "Allow" => ThreatAction.Allow,
+            "None" => ThreatAction.None,
+            _ => ThreatAction.Quarantine
+        };
+        _scheduleEnabled = cfg.ScheduleEnabled;
+        _scanTime = string.IsNullOrWhiteSpace(cfg.ScanTime) ? "02:30" : cfg.ScanTime;
+        _scheduleScanType = string.IsNullOrWhiteSpace(cfg.ScheduleScanType) ? "QuickScan" : cfg.ScheduleScanType;
+        _autoUpdateSignatures = cfg.AutoUpdateSignatures;
+        _sigMaxAgeDays = cfg.SignatureMaxAgeDays > 0 ? cfg.SignatureMaxAgeDays : 3;
+        _alertOnThreat = cfg.AlertOnThreat;
+        _alertOnProtectionDisabled = cfg.AlertOnProtectionDisabled;
+    }
+
+    /// <summary>保存调度/告警策略到 AppConfig.Defender 并落盘（P1-5）。</summary>
+    private void SaveDefenderPolicy()
+    {
+        var cfg = AppState.Config.Defender;
+        cfg.ScanPriority = _scanPriority == ProcessPriorityClass.BelowNormal ? 1 : 0;
+        cfg.ThreatAction = _remediationAction switch
+        {
+            ThreatAction.Remove => "Remove",
+            ThreatAction.Allow => "Allow",
+            ThreatAction.None => "None",
+            _ => "Quarantine"
+        };
+        cfg.ScheduleEnabled = _scheduleEnabled;
+        cfg.ScanTime = _scanTime;
+        cfg.ScheduleScanType = _scheduleScanType;
+        cfg.AutoUpdateSignatures = _autoUpdateSignatures;
+        cfg.SignatureMaxAgeDays = _sigMaxAgeDays;
+        cfg.AlertOnThreat = _alertOnThreat;
+        cfg.AlertOnProtectionDisabled = _alertOnProtectionDisabled;
+        ConfigManager.Save(AppState.Config);
+        ErrorReporter.Log("[Defender] 扫描/调度策略已保存到配置");
     }
 
     /// <summary>
@@ -571,6 +632,183 @@ public class DefenderScanPage : Page
         _historyPanel.Tag = lv;
 
         y += 440;
+
+        // ===== P1-5：累计威胁清单（跨重启持久化）+ 事后处置 =====
+        var threatHeader = CreateCardIn(_historyPanel, 0, y, ContentWidth, 44);
+
+        var threatTitle = new Label
+        {
+            Text = "威胁清单（累计，跨重启保留）",
+            Font = Theme.HeaderFont,
+            ForeColor = Theme.TextPrimary,
+            Location = new Point(16, 12),
+            Size = new Size(300, 24),
+            BackColor = Color.Transparent
+        };
+        threatHeader.Controls.Add(threatTitle);
+
+        y += 54;
+
+        var threatCard = CreateCardIn(_historyPanel, 0, y, ContentWidth, 250);
+
+        // 处置按钮行
+        var quarantineBtn = new AccentButton
+        {
+            Text = "隔离所选",
+            Location = new Point(12, 10),
+            Size = new Size(88, 28)
+        };
+        quarantineBtn.Click += () => HandleSelectedThreats(ThreatAction.Quarantine);
+        threatCard.Controls.Add(quarantineBtn);
+
+        var deleteBtn = new AccentButton
+        {
+            Text = "删除所选",
+            Location = new Point(108, 10),
+            Size = new Size(88, 28)
+        };
+        deleteBtn.Click += () => HandleSelectedThreats(ThreatAction.Remove);
+        threatCard.Controls.Add(deleteBtn);
+
+        var allowBtn = new AccentButton
+        {
+            Text = "允许所选",
+            Location = new Point(204, 10),
+            Size = new Size(88, 28)
+        };
+        allowBtn.Click += () => HandleSelectedThreats(ThreatAction.Allow);
+        threatCard.Controls.Add(allowBtn);
+
+        var quarantineMgmtBtn = new AccentButton
+        {
+            Text = "恢复隔离区",
+            Location = new Point(ContentWidth - 120, 10),
+            Size = new Size(104, 28)
+        };
+        quarantineMgmtBtn.Click += () =>
+        {
+            using var dialog = new QuarantineManageDialog();
+            dialog.ShowDialog(this);
+            RefreshThreatList();
+        };
+        threatCard.Controls.Add(quarantineMgmtBtn);
+
+        var threatLv = new ListView
+        {
+            Location = new Point(8, 44),
+            Size = new Size(ContentWidth - 16, 196),
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            Font = Theme.SmallFont,
+            BackColor = Theme.CardBg,
+            ForeColor = Theme.TextPrimary,
+            BorderStyle = BorderStyle.None
+        };
+        threatLv.Columns.Add("威胁名称", 180);
+        threatLv.Columns.Add("文件路径", 320);
+        threatLv.Columns.Add("严重等级", 80);
+        threatLv.Columns.Add("处置", 90);
+        threatLv.Columns.Add("发现时间", 130);
+        threatCard.Controls.Add(threatLv);
+
+        _threatListLv = threatLv;
+
+        RefreshThreatList();
+    }
+
+    /// <summary>刷新威胁清单列表（持久化数据源）。</summary>
+    private void RefreshThreatList()
+    {
+        if (_threatListLv == null) return;
+        _threatListLv.Items.Clear();
+
+        if (_module == null) return;
+
+        var threats = _module.GetThreatList();
+        for (int i = threats.Count - 1; i >= 0; i--)
+        {
+            var t = threats[i];
+            var item = new ListViewItem(t.ThreatName);
+            item.SubItems.Add(t.FilePath);
+            item.SubItems.Add(t.Severity.ToString());
+            item.SubItems.Add(t.ActionTaken.ToString());
+            item.SubItems.Add(t.DetectedAt.ToString("yyyy-MM-dd HH:mm"));
+            item.ForeColor = t.Severity >= ThreatSeverity.High ? Theme.Error : Theme.Warning;
+            _threatListLv.Items.Add(item);
+        }
+    }
+
+    /// <summary>
+    /// 对威胁清单选中项执行事后处置（P1-5）：
+    /// 隔离 = AES 加密移入隔离区并删除原文件；删除 = 直接删除；允许 = 仅记录放行。
+    /// 处置结果回写模块威胁状态并持久化。
+    /// </summary>
+    private void HandleSelectedThreats(ThreatAction action)
+    {
+        if (_threatListLv == null || _module == null) return;
+        if (_threatListLv.SelectedItems.Count == 0)
+        {
+            MessageBoxHelper.Warn("请先在威胁清单中选择要处置的条目。");
+            return;
+        }
+
+        int ok = 0, fail = 0;
+        foreach (ListViewItem item in _threatListLv.SelectedItems)
+        {
+            var threatName = item.Text;
+            var filePath = item.SubItems.Count > 1 ? item.SubItems[1].Text : "";
+
+            bool success = false;
+            try
+            {
+                switch (action)
+                {
+                    case ThreatAction.Quarantine:
+                        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                        {
+                            using var qm = new QuarantineManager();
+                            success = !string.IsNullOrEmpty(qm.QuarantineFile(filePath, "Defender 威胁处置", threatName));
+                        }
+                        else success = true; // 文件已不存在则视为已处置
+                        break;
+                    case ThreatAction.Remove:
+                        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                        {
+                            File.Delete(filePath);
+                            success = true;
+                        }
+                        else success = true;
+                        break;
+                    case ThreatAction.Allow:
+                        success = true;
+                        break;
+                }
+
+                if (success)
+                {
+                    _module.UpdateThreatAction(threatName, filePath, action);
+                    ok++;
+                }
+                else fail++;
+            }
+            catch (Exception ex)
+            {
+                fail++;
+                ErrorReporter.Report(ex, $"Defender 威胁处置失败: {threatName} @ {filePath}");
+            }
+        }
+
+        AuditLogSystem.Log(fail > 0 ? LogLevel.Warning : LogLevel.Info, LogCategory.DefenderScan,
+            $"Defender 威胁处置：{action}",
+            $"成功 {ok} 个 / 失败 {fail} 个");
+
+        if (fail > 0)
+            MessageBoxHelper.Warn($"处置完成：成功 {ok} 个，失败 {fail} 个。");
+        else
+            MessageBoxHelper.Info($"已对 {ok} 个威胁执行「{action}」处置。");
+
+        RefreshThreatList();
     }
 
     /// <summary>刷新历史列表</summary>
@@ -644,7 +882,8 @@ public class DefenderScanPage : Page
                 ? ProcessPriorityClass.BelowNormal
                 : ProcessPriorityClass.Normal;
             if (_scanner != null) _scanner.ScanPriority = _scanPriority;
-            ErrorReporter.Log($"Defender 扫描优先级已设置为 {_scanPriority}");
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 扫描优先级已设置为 {_scanPriority}（已持久化）");
         };
         card.Controls.Add(_priorityCombo);
 
@@ -679,11 +918,13 @@ public class DefenderScanPage : Page
             Font = Theme.BodyFont,
             DropDownStyle = ComboBoxStyle.DropDownList
         };
-        _remediationCombo.Items.AddRange(new object[] { "隔离（推荐）", "删除", "允许" });
+        // 处置动作：隔离/删除/允许/不处置（None 与配置项一一对应，保证显示与实际一致）
+        _remediationCombo.Items.AddRange(new object[] { "隔离（推荐）", "删除", "允许", "不处置（仅告警）" });
         _remediationCombo.SelectedIndex = _remediationAction switch
         {
             ThreatAction.Remove => 1,
             ThreatAction.Allow => 2,
+            ThreatAction.None => 3,
             _ => 0
         };
         _remediationCombo.SelectedIndexChanged += (s, e) =>
@@ -692,9 +933,11 @@ public class DefenderScanPage : Page
             {
                 1 => ThreatAction.Remove,
                 2 => ThreatAction.Allow,
+                3 => ThreatAction.None,
                 _ => ThreatAction.Quarantine
             };
-            ErrorReporter.Log($"Defender 处置动作已设置为 {_remediationAction}");
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 处置动作已设置为 {_remediationAction}（已持久化）");
         };
         card.Controls.Add(_remediationCombo);
 
@@ -759,6 +1002,278 @@ public class DefenderScanPage : Page
         card.Controls.Add(tipLabel);
 
         y += 220;
+
+        // ===== P1-5：每日调度与保护监控配置 =====
+        CreateSectionTitleIn(_policyPanel, "每日调度与保护监控", 0, y);
+        y += 30;
+
+        var schedCard = CreateCardIn(_policyPanel, 0, y, ContentWidth, 300);
+
+        int colX1 = 16, colX2 = 140, colX3 = 330;
+        int rowY = 16, rowGap = 44;
+
+        // 定时扫描开关
+        var schedLabel = new Label
+        {
+            Text = "每日定时扫描：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX1, rowY),
+            Size = new Size(120, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(schedLabel);
+
+        _scheduleToggle = new ToggleSwitch
+        {
+            Location = new Point(colX2, rowY + 2),
+            IsOn = _scheduleEnabled
+        };
+        _scheduleToggle.Toggled += (on) =>
+        {
+            _scheduleEnabled = on;
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 每日定时扫描: {(on ? "开" : "关")}（已持久化）");
+        };
+        schedCard.Controls.Add(_scheduleToggle);
+
+        var schedDesc = new Label
+        {
+            Text = "开启后每天到设定时间自动执行一次快速/全盘扫描，结果记入历史",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(colX3, rowY),
+            Size = new Size(ContentWidth - colX3 - 20, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(schedDesc);
+        rowY += rowGap;
+
+        // 扫描时间
+        var timeLabel = new Label
+        {
+            Text = "扫描时间：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX1, rowY),
+            Size = new Size(120, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(timeLabel);
+
+        _scanTimeCombo = new ComboBox
+        {
+            Location = new Point(colX2, rowY - 2),
+            Size = new Size(180, 24),
+            FlatStyle = FlatStyle.Flat,
+            Font = Theme.BodyFont,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        // 预设常用时间；若配置值不在预设列表（如自定义 05:00），动态加入并选中，
+        // 保证 UI 显示与实际配置一致（否则会错误回退到 02:30）
+        _scanTimeCombo.Items.AddRange(new object[] { "01:00", "02:00", "02:30", "03:00", "04:00", "12:00", "22:00", "23:00" });
+        if (!_scanTimeCombo.Items.Contains(_scanTime))
+            _scanTimeCombo.Items.Add(_scanTime);
+        _scanTimeCombo.SelectedItem = _scanTime;
+        _scanTimeCombo.SelectedIndexChanged += (s, e) =>
+        {
+            if (_scanTimeCombo.SelectedItem is string t)
+            {
+                _scanTime = t;
+                SaveDefenderPolicy();
+                ErrorReporter.Log($"Defender 定时扫描时间已设置为 {_scanTime}（已持久化）");
+            }
+        };
+        schedCard.Controls.Add(_scanTimeCombo);
+
+        var timeDesc = new Label
+        {
+            Text = "建议选择非工作时段（如凌晨），避免影响日常使用",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(colX3, rowY),
+            Size = new Size(360, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(timeDesc);
+        rowY += rowGap;
+
+        // 定时扫描类型
+        var typeLabel = new Label
+        {
+            Text = "定时扫描类型：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX1, rowY),
+            Size = new Size(120, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(typeLabel);
+
+        _scheduleTypeCombo = new ComboBox
+        {
+            Location = new Point(colX2, rowY - 2),
+            Size = new Size(180, 24),
+            FlatStyle = FlatStyle.Flat,
+            Font = Theme.BodyFont,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _scheduleTypeCombo.Items.AddRange(new object[] { "快速扫描", "全盘扫描" });
+        _scheduleTypeCombo.SelectedIndex =
+            string.Equals(_scheduleScanType, "FullScan", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        _scheduleTypeCombo.SelectedIndexChanged += (s, e) =>
+        {
+            _scheduleScanType = _scheduleTypeCombo.SelectedIndex == 1 ? "FullScan" : "QuickScan";
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 定时扫描类型已设置为 {_scheduleScanType}（已持久化）");
+        };
+        schedCard.Controls.Add(_scheduleTypeCombo);
+
+        var typeDesc = new Label
+        {
+            Text = "全盘扫描耗时较长，建议在空闲时段启用",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(colX3, rowY),
+            Size = new Size(360, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(typeDesc);
+        rowY += rowGap;
+
+        // 病毒库自动更新
+        var sigLabel = new Label
+        {
+            Text = "病毒库自动更新：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX1, rowY),
+            Size = new Size(130, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(sigLabel);
+
+        _autoSigToggle = new ToggleSwitch
+        {
+            Location = new Point(colX2, rowY + 2),
+            IsOn = _autoUpdateSignatures
+        };
+        _autoSigToggle.Toggled += (on) =>
+        {
+            _autoUpdateSignatures = on;
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 病毒库自动更新: {(on ? "开" : "关")}（已持久化）");
+        };
+        schedCard.Controls.Add(_autoSigToggle);
+
+        // 过期天数
+        var ageLabel = new Label
+        {
+            Text = "过期天数：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX3 - 40, rowY),
+            Size = new Size(90, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(ageLabel);
+
+        _sigMaxAgeCombo = new ComboBox
+        {
+            Location = new Point(colX3 + 60, rowY - 2),
+            Size = new Size(90, 24),
+            FlatStyle = FlatStyle.Flat,
+            Font = Theme.BodyFont,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        // 过期天数：预设 1/3/7/14；若配置为其他值（如 5），动态加入并选中，保证显示与实际一致
+        _sigMaxAgeCombo.Items.AddRange(new object[] { "1 天", "3 天", "7 天", "14 天" });
+        if (!_sigMaxAgeCombo.Items.Contains($"{_sigMaxAgeDays} 天"))
+            _sigMaxAgeCombo.Items.Add($"{_sigMaxAgeDays} 天");
+        _sigMaxAgeCombo.SelectedItem = $"{_sigMaxAgeDays} 天";
+        _sigMaxAgeCombo.SelectedIndexChanged += (s, e) =>
+        {
+            _sigMaxAgeDays = _sigMaxAgeCombo.SelectedIndex switch { 0 => 1, 2 => 7, 3 => 14, _ => 3 };
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 病毒库过期天数阈值已设置为 {_sigMaxAgeDays} 天（已持久化）");
+        };
+        schedCard.Controls.Add(_sigMaxAgeCombo);
+        rowY += rowGap;
+
+        // 威胁告警
+        var alertLabel = new Label
+        {
+            Text = "威胁 Webhook 告警：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX1, rowY),
+            Size = new Size(130, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(alertLabel);
+
+        _alertThreatToggle = new ToggleSwitch
+        {
+            Location = new Point(colX2, rowY + 2),
+            IsOn = _alertOnThreat
+        };
+        _alertThreatToggle.Toggled += (on) =>
+        {
+            _alertOnThreat = on;
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 威胁 Webhook 告警: {(on ? "开" : "关")}（已持久化）");
+        };
+        schedCard.Controls.Add(_alertThreatToggle);
+
+        var alertDesc = new Label
+        {
+            Text = "发现威胁时经钉钉/企微 Webhook 外发告警（需在设置中配置 Webhook）",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(colX3, rowY),
+            Size = new Size(ContentWidth - colX3 - 20, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(alertDesc);
+        rowY += rowGap;
+
+        // 保护关闭告警
+        var protLabel = new Label
+        {
+            Text = "保护异常告警：",
+            Font = Theme.BodyFont,
+            ForeColor = Theme.TextSecondary,
+            Location = new Point(colX1, rowY),
+            Size = new Size(130, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(protLabel);
+
+        _alertProtectionToggle = new ToggleSwitch
+        {
+            Location = new Point(colX2, rowY + 2),
+            IsOn = _alertOnProtectionDisabled
+        };
+        _alertProtectionToggle.Toggled += (on) =>
+        {
+            _alertOnProtectionDisabled = on;
+            SaveDefenderPolicy();
+            ErrorReporter.Log($"Defender 实时保护异常告警: {(on ? "开" : "关")}（已持久化）");
+        };
+        schedCard.Controls.Add(_alertProtectionToggle);
+
+        var protDesc = new Label
+        {
+            Text = "实时保护被关闭 / 引擎健康异常时 Webhook 告警（每日限流一次）",
+            Font = Theme.SmallFont,
+            ForeColor = Theme.TextTertiary,
+            Location = new Point(colX3, rowY),
+            Size = new Size(ContentWidth - colX3 - 20, 22),
+            BackColor = Color.Transparent
+        };
+        schedCard.Controls.Add(protDesc);
+
+        y += 320;
     }
 
     // ==================== 扫描执行 ====================
@@ -939,6 +1454,9 @@ public class DefenderScanPage : Page
 
         // 记录到模块历史
         _module?.RecordScan(result);
+
+        // P1-5：扫描完成后刷新持久化威胁清单（历史页）
+        RefreshThreatList();
 
         // P1-6：扫描事件完整写入审计日志（支持报表导出）
         AuditLogSystem.Log(

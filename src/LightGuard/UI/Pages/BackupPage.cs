@@ -2440,6 +2440,38 @@ public class BackupPage : Page
 
         try
         {
+            // P0-4 权限重构方案A：非管理员 → 经 Worker 子进程免 UAC / UAC 提权执行
+            if (!PrivilegedWorker.IsAdmin)
+            {
+                if (_vssProgressLabel != null)
+                {
+                    _vssProgressLabel.Text = "VSS 需要管理员权限，正在通过工作进程提权执行...";
+                    _vssProgressLabel.ForeColor = Theme.Accent;
+                }
+                UpdateProgressBar(_vssProgressBar, 5);
+
+                var result = await PrivilegedWorker.RunAsync(new WorkerSpec
+                {
+                    Op = "VssBackup",
+                    Source = source,
+                    Dest = dest,
+                    Password = password
+                });
+
+                if (result.Success)
+                {
+                    UpdateProgressBar(_vssProgressBar, 100);
+                    if (_vssProgressLabel != null) { _vssProgressLabel.Text = "VSS 备份完成"; _vssProgressLabel.ForeColor = Theme.Success; }
+                    MessageBoxHelper.Info($"VSS 备份成功（经高权限工作进程）\n\n{result.Message}");
+                }
+                else
+                {
+                    if (_vssProgressLabel != null) { _vssProgressLabel.Text = "VSS 备份失败"; _vssProgressLabel.ForeColor = Theme.Error; }
+                    MessageBoxHelper.Error($"VSS 备份失败：{result.Message}");
+                }
+                return;
+            }
+
             _vssEngine?.Dispose();
             _vssEngine = new VssShadowCopyEngine(AppState);
 

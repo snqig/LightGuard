@@ -7,15 +7,18 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- WFAC010：dpiAwareness 已手动声明在 app.manifest（指定 ApplicationManifest 时 SDK 不自动注入），
+         与 Program.cs SetHighDpiMode(PerMonitorV2) 配合生效，抑制该提示性警告 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>3.3.0</Version>
-    <AssemblyVersion>3.3.0.0</AssemblyVersion>
-    <FileVersion>3.3.0.0</FileVersion>
+    <Version>3.4.0</Version>
+    <AssemblyVersion>3.4.0.0</AssemblyVersion>
+    <FileVersion>3.4.0.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
     <Copyright>© 2026 落尘（Luochen）保留所有权利</Copyright>
-    <Description>LightGuard V3.3 全栈安全容灾审计系统 - 选择性还原 + .lgbackup 备份内容可视化浏览</Description>
+    <Description>LightGuard V3.4 全栈安全容灾审计系统 - Defender 全业务集成 + P1 全批次能力</Description>
     <NeutralLanguage>zh-CN</NeutralLanguage>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>
@@ -53,6 +56,7 @@
 
   <ItemGroup>
     <!-- System.Management: WMI 查询（硬件检测、Windows Defender 状态查询） -->
+    <PackageReference Include="LZMA-SDK" Version="22.1.1" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <!-- System.ServiceProcess.ServiceController: Windows 服务管理（禁用流氓软件后台服务） -->
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />

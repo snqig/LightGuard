@@ -43,6 +43,12 @@ public sealed class AppConfig
     /// <summary>商业软件联网隔离配置（Adobe / CorelDRAW 等套件出站阻断）</summary>
     public SuiteIsolationConfig SuiteIsolation { get; set; } = new();
 
+    /// <summary>风险告警通知配置（钉钉/企微 Webhook，P1-2）</summary>
+    public AlertConfig Alert { get; set; } = new();
+
+    /// <summary>Microsoft Defender 全业务集成配置（P1-5）</summary>
+    public DefenderConfig Defender { get; set; } = new();
+
     /// <summary>是否允许后台调度</summary>
     public bool BackgroundSchedulingEnabled { get; set; } = true;
 
@@ -105,6 +111,12 @@ public sealed class BackupConfig
 
     /// <summary>备份前自动查杀源文件（P1-6 联动：恶意文件跳过备份）</summary>
     public bool ScanBeforeBackup { get; set; } = true;
+
+    /// <summary>
+    /// WORM 自动锁定：备份完成后自动对备份包施加三层防删除锁
+    /// （NTFS ACL + 只读属性 + 标记文件），勒索病毒无法删除/篡改备份。
+    /// </summary>
+    public bool WormAutoLock { get; set; } = true;
 }
 
 public enum BackupMode { Full, Incremental }
@@ -215,4 +227,38 @@ public sealed class SuiteIsolationConfig
 
     /// <summary>套件隔离配置列表</summary>
     public List<SuiteBlockConfig> Suites { get; set; } = new();
+}
+
+/// <summary>
+/// Microsoft Defender 全业务集成配置（P1-5）
+/// 定时扫描 / 病毒库自动更新 / 实时保护监控 / 威胁告警 / 处置策略
+/// </summary>
+public sealed class DefenderConfig
+{
+    /// <summary>是否启用每日定时扫描</summary>
+    public bool ScheduleEnabled { get; set; } = true;
+
+    /// <summary>每日定时扫描时间（HH:mm，24 小时制，默认 02:30）</summary>
+    public string ScanTime { get; set; } = "02:30";
+
+    /// <summary>定时扫描类型（QuickScan / FullScan）</summary>
+    public string ScheduleScanType { get; set; } = "QuickScan";
+
+    /// <summary>扫描优先级（0=Normal，1=BelowNormal）</summary>
+    public int ScanPriority { get; set; }
+
+    /// <summary>扫描发现威胁后的处置动作（Quarantine / Remove / Allow / None）</summary>
+    public string ThreatAction { get; set; } = "Quarantine";
+
+    /// <summary>是否自动更新病毒库（过期后按 SignatureMaxAgeDays 触发）</summary>
+    public bool AutoUpdateSignatures { get; set; } = true;
+
+    /// <summary>病毒库过期天数阈值（超过则自动更新，默认 3 天）</summary>
+    public int SignatureMaxAgeDays { get; set; } = 3;
+
+    /// <summary>发现威胁时是否 Webhook 告警（钉钉/企微，P1-5）</summary>
+    public bool AlertOnThreat { get; set; } = true;
+
+    /// <summary>实时保护被关闭 / 引擎异常时是否 Webhook 告警（P1-5）</summary>
+    public bool AlertOnProtectionDisabled { get; set; } = true;
 }

@@ -14,6 +14,10 @@ public class SidebarButton : Control
     public event Action? NavClicked;
 
     public string NavKey { get; }
+
+    /// <summary>是否禁用（非管理员灰化的高危功能入口）。禁用时不响应悬停/点击。</summary>
+    public bool Disabled { get; set; }
+
     public bool IsActive
     {
         get => _isActive;
@@ -31,12 +35,18 @@ public class SidebarButton : Control
         Font = Theme.BodyFont;
     }
 
-    protected override void OnMouseEnter(EventArgs e) { _isHovered = true; Invalidate(); }
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        if (Disabled) return;
+        _isHovered = true; Invalidate();
+    }
+
     protected override void OnMouseLeave(EventArgs e) { _isHovered = false; Invalidate(); }
 
     protected override void OnClick(EventArgs e)
     {
         base.OnClick(e);
+        if (Disabled) return;
         NavClicked?.Invoke();
     }
 
@@ -45,6 +55,23 @@ public class SidebarButton : Control
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        // P1-4 DPI 适配：手绘文字按当前 DPI 放大，避免高分屏下偏小
+        using var iconFont = Theme.DpiFont(Theme.HeaderFont, this);
+        using var textFont = Theme.DpiFont(Font, this);
+
+        // 禁用态：灰色背景 + 全灰文字，不响应激活/悬停视觉
+        if (Disabled)
+        {
+            using var disabledBgBrush = new SolidBrush(Theme.DisabledBg);
+            Theme.FillRoundedRect(g, disabledBgBrush, ClientRectangle, 4);
+            using var disabledIconBrush = new SolidBrush(Theme.TextTertiary);
+            var disabledIconRect = new Rectangle(16, 0, 24, Height);
+            Theme.DrawCenteredText(g, _icon, iconFont, disabledIconBrush, disabledIconRect);
+            using var disabledTextBrush = new SolidBrush(Theme.TextTertiary);
+            Theme.DrawLeftText(g, Text + "  🔒", textFont, disabledTextBrush, new Rectangle(44, 0, Width - 52, Height), 0);
+            return;
+        }
 
         // 背景
         if (_isActive)
@@ -68,11 +95,11 @@ public class SidebarButton : Control
         // 图标（简单Unicode符号）
         using var iconBrush = new SolidBrush(_isActive ? Theme.Accent : Theme.TextSecondary);
         var iconRect = new Rectangle(16, 0, 24, Height);
-        Theme.DrawCenteredText(g, _icon, Theme.HeaderFont, iconBrush, iconRect);
+        Theme.DrawCenteredText(g, _icon, iconFont, iconBrush, iconRect);
 
         // 文字
         using var textBrush = new SolidBrush(_isActive ? Theme.TextPrimary : Theme.TextSecondary);
-        Theme.DrawLeftText(g, Text, Font, textBrush, new Rectangle(44, 0, Width - 52, Height), 0);
+        Theme.DrawLeftText(g, Text, textFont, textBrush, new Rectangle(44, 0, Width - 52, Height), 0);
     }
 }
 
@@ -192,9 +219,10 @@ public class AccentButton : Control
         using var brush = new SolidBrush(bgColor);
         Theme.FillRoundedRect(g, brush, ClientRectangle, Theme.ButtonRadius);
 
-        // 文字
+        // 文字（P1-4 DPI 适配：手绘文字按当前 DPI 放大）
+        using var textFont = Theme.DpiFont(Font, this);
         using var textBrush = new SolidBrush(Color.White);
-        Theme.DrawCenteredText(g, Text, Font, textBrush, ClientRectangle);
+        Theme.DrawCenteredText(g, Text, textFont, textBrush, ClientRectangle);
     }
 }
 

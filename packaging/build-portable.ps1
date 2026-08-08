@@ -73,6 +73,12 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败，退出码 $LASTEXITCOD
 Write-Host "`n[2/4] 精简外部资源 (Edition=$Edition) ..."
 Apply-EditionTrim -StagingDir $staging -Edition $Edition
 
+# P1-1 双版本分发：写入便携版标记文件（运行时 DistributionProfile 据此识别部署形态，
+# 便携版单文件不支持文件级差分更新，软件本体更新走全量包替换）
+$portableMarker = Join-Path $staging 'portable.mode'
+Set-Content -Path $portableMarker -Value '1' -Encoding ASCII
+Write-Host "  [便携版] 已写入 portable.mode 标记"
+
 # ---- 3. 重命名 EXE 并打包 ----
 Write-Host "`n[3/4] 生成发布产物 ..."
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null

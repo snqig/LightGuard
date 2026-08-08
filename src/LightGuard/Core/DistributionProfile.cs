@@ -20,6 +20,20 @@ public enum DistributionEdition
 }
 
 /// <summary>
+/// 部署形态枚举。
+/// <para>Installed：MSI 目录部署（Program Files），支持文件级差分增量更新。</para>
+/// <para>Portable：绿色便携版（单 EXE 免安装），软件本体更新走全量包替换。</para>
+/// </summary>
+public enum DeploymentMode
+{
+    /// <summary>MSI 安装部署（目录部署，可差分更新）</summary>
+    Installed,
+
+    /// <summary>绿色便携部署（单 EXE / 自定义目录）</summary>
+    Portable
+}
+
+/// <summary>
 /// 分发版本配置文件 — 根据运行环境自动检测并应用 Client/Server 配置。
 /// <para>P1-1：双版本分发架构（MSI 安装版 + 便携版）。</para>
 /// <para>调用规范：在 AppState.Initialize() 之后、LangHelper.Initialize() 之前调用 DetectFromEnvironment()。</para>
@@ -65,6 +79,16 @@ public static class DistributionProfile
     public static bool IsInitialized { get; private set; }
 
     /// <summary>
+    /// 部署形态。
+    /// <para>Installed：MSI 目录部署（Program Files），支持文件级差分增量更新。</para>
+    /// <para>Portable：绿色便携版（单 EXE 免安装），软件本体更新走全量包替换。</para>
+    /// </summary>
+    public static DeploymentMode Mode { get; private set; } = DeploymentMode.Installed;
+
+    /// <summary>是否为便携版部署。</summary>
+    public static bool IsPortable => Mode == DeploymentMode.Portable;
+
+    /// <summary>
     /// 手动初始化指定版本。
     /// </summary>
     /// <param name="edition">目标分发版本</param>
@@ -86,6 +110,9 @@ public static class DistributionProfile
     /// </summary>
     public static void DetectFromEnvironment()
     {
+        // 0. 检测部署形态（便携版标记优先于服务器标记，互不冲突）
+        DetectDeploymentMode();
+
         // 1. 检查环境变量 LIGHTGUARD_SERVER
         var envServer = Environment.GetEnvironmentVariable("LIGHTGUARD_SERVER");
         if (string.Equals(envServer, "1", StringComparison.OrdinalIgnoreCase) ||
@@ -116,6 +143,51 @@ public static class DistributionProfile
         // 默认：客户端版本
         Initialize(DistributionEdition.Client);
         ErrorReporter.Log("未检测到服务器环境，启用客户端版本", "INFO");
+    }
+
+    /// <summary>
+    /// 检测部署形态（便携版 / 安装版）。检测顺序：
+    /// <list type="number">
+    ///   <item>环境变量 LIGHTGUARD_PORTABLE=1</item>
+    ///   <item>应用目录下存在 portable.mode 标记文件（build-portable.ps1 写入）</item>
+    ///   <item>应用目录不在 Program Files 下 → 视为便携（U盘/自定义目录免安装运行）</item>
+    /// </list>
+    /// </summary>
+    private static void DetectDeploymentMode()
+    {
+        try
+        {
+            var envPortable = Environment.GetEnvironmentVariable("LIGHTGUARD_PORTABLE");
+            if (string.Equals(envPortable, "1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(envPortable, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                Mode = DeploymentMode.Portable;
+                ErrorReporter.Log("检测到 LIGHTGUARD_PORTABLE 环境变量，启用便携部署模式", "INFO");
+                return;
+            }
+
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            if (File.Exists(Path.Combine(baseDir, "portable.mode")))
+            {
+                Mode = DeploymentMode.Portable;
+                ErrorReporter.Log("检测到 portable.mode 标记文件，启用便携部署模式", "INFO");
+                return;
+            }
+
+            // 安装在 Program Files 下 → 安装版；否则视为便携（U盘/绿色运行）
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            var inProgramFiles =
+                (programFiles.Length > 0 && baseDir.StartsWith(programFiles, StringComparison.OrdinalIgnoreCase)) ||
+                (programFilesX86.Length > 0 && baseDir.StartsWith(programFilesX86, StringComparison.OrdinalIgnoreCase));
+            Mode = inProgramFiles ? DeploymentMode.Installed : DeploymentMode.Portable;
+            ErrorReporter.Log($"未检测到便携标记，按安装目录判定部署模式：{Mode}", "INFO");
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "部署形态检测失败，默认安装版");
+            Mode = DeploymentMode.Installed;
+        }
     }
 
     /// <summary>

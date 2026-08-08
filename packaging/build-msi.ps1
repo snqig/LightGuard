@@ -120,6 +120,12 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine('    <StandardDirectory Id="ProgramMenuFolder">')
 [void]$sb.AppendLine('      <Directory Id="ProgramMenuDir" Name="LightGuard" />')
 [void]$sb.AppendLine('    </StandardDirectory>')
+# P0-10 服务器版：系统级共享数据目录 %ProgramData%\LightGuard（安装时创建 + ACL 配置）
+if ($Edition -eq 'Server') {
+    [void]$sb.AppendLine('    <StandardDirectory Id="CommonAppDataFolder">')
+    [void]$sb.AppendLine('      <Directory Id="DATA_FOLDER" Name="LightGuard" />')
+    [void]$sb.AppendLine('    </StandardDirectory>')
+}
 
 # 生成组件组
 [void]$sb.AppendLine('    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">')
@@ -158,11 +164,41 @@ foreach ($f in $files) {
 [void]$sb.AppendLine('      <RegistryValue Root="HKLM" Key="Software\LightGuard" Name="installed" Type="integer" Value="1" KeyPath="yes" />')
 [void]$sb.AppendLine('    </Component>')
 
+# P0-10 服务器版：数据目录组件（创建目录 + ACL：SYSTEM/Admins 完全控制、Users 读写执行）
+if ($Edition -eq 'Server') {
+    $dataFolderGuid = New-DeterministicGuid 'data-folder-ProgramData-LightGuard'
+    [void]$sb.AppendLine("    <Component Id=""CMP_DataFolder"" Directory=""DATA_FOLDER"" Guid=""${dataFolderGuid}"">")
+    [void]$sb.AppendLine('      <CreateFolder>')
+    [void]$sb.AppendLine('        <Permission User="SYSTEM" GenericAll="yes" />')
+    [void]$sb.AppendLine('        <Permission User="Administrators" GenericAll="yes" />')
+    [void]$sb.AppendLine('        <Permission User="Users" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" Delete="yes" />')
+    [void]$sb.AppendLine('      </CreateFolder>')
+    [void]$sb.AppendLine('      <RemoveFolder Id="RemoveDataFolder" On="uninstall" />')
+    [void]$sb.AppendLine('    </Component>')
+}
+
 [void]$sb.AppendLine('    <Feature Id="MainFeature" Title="LightGuard" Description="LightGuard 核心程序与资源" Level="1">')
 [void]$sb.AppendLine('      <ComponentGroupRef Id="ProductComponents" />')
 [void]$sb.AppendLine('      <ComponentRef Id="CMP_StartMenuShortcut" />')
 [void]$sb.AppendLine('      <ComponentRef Id="CMP_RemoveInstallFolder" />')
+if ($Edition -eq 'Server') {
+    [void]$sb.AppendLine('      <ComponentRef Id="CMP_DataFolder" />')
+}
 [void]$sb.AppendLine('    </Feature>')
+
+# P0-10 安装器权限优化：计划任务生命周期（安装/升级注册免 UAC 提权任务；卸载注销，无残留）
+# CustomAction 直接调用 LightGuard.exe 的专用命令行模式（避免 schtasks 引号拼接），
+# 以 msiexec 提升身份（Impersonate=no）执行；Return=ignore 保证失败不阻塞安装/卸载。
+[void]$sb.AppendLine('    <CustomAction Id="RegisterElevTask" Directory="INSTALLFOLDER"')
+[void]$sb.AppendLine('      ExeCommand="&quot;[INSTALLFOLDER]LightGuard.exe&quot; --register-elevation-task"')
+[void]$sb.AppendLine('      Execute="immediate" Impersonate="no" Return="ignore" />')
+[void]$sb.AppendLine('    <CustomAction Id="UnregisterElevTask" Directory="INSTALLFOLDER"')
+[void]$sb.AppendLine('      ExeCommand="&quot;[INSTALLFOLDER]LightGuard.exe&quot; --unregister-elevation-task"')
+[void]$sb.AppendLine('      Execute="immediate" Impersonate="no" Return="ignore" />')
+[void]$sb.AppendLine('    <InstallExecuteSequence>')
+[void]$sb.AppendLine('      <Custom Action="RegisterElevTask" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />')
+[void]$sb.AppendLine('      <Custom Action="UnregisterElevTask" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />')
+[void]$sb.AppendLine('    </InstallExecuteSequence>')
 [void]$sb.AppendLine('  </Package>')
 [void]$sb.AppendLine('</Wix>')
 
