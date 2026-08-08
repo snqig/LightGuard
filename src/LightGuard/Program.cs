@@ -37,6 +37,16 @@ internal static class Program
             return;
         }
 
+        // v3.5 dbconfig：数据库备份交互式引导配置（控制台模式，无界面执行后退出）
+        if (args.Contains("dbconfig"))
+        {
+            var wizardAppState = AppState.Initialize();
+            // 授权门禁配置注入（读取 AppConfig.License）
+            LicenseGuard.SetConfigProvider(() => wizardAppState.Config.License);
+            Environment.ExitCode = Database.DbConfigWizard.Run(wizardAppState);
+            return;
+        }
+
         // P0-4 权限重构方案A（收尾）：UI 以普通权限运行（manifest=asInvoker）。
         // 非管理员直接进入应用（高危功能导航灰化 + Worker 提权执行）；
         // 管理员启动时注册免 UAC 提权计划任务（尽力而为，供后续 Worker 使用）。

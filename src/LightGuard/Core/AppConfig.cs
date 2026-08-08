@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
+using LightGuard.Backup;
 using LightGuard.Core.Interfaces;
+using LightGuard.Database;
 using LightGuard.NetworkIsolation;
 
 namespace LightGuard.Core;
@@ -48,6 +50,15 @@ public sealed class AppConfig
 
     /// <summary>Microsoft Defender 全业务集成配置（P1-5）</summary>
     public DefenderConfig Defender { get; set; } = new();
+
+    /// <summary>授权状态（v3.5：未授权禁用加密备份/定时/实时/数据库全部能力）</summary>
+    public LicenseConfig License { get; set; } = new();
+
+    /// <summary>文件备份任务列表（v3.5：定时全量/增量 + 实时监控增量）</summary>
+    public List<FileBackupJob> FileBackupJobs { get; set; } = new();
+
+    /// <summary>数据库备份实例列表（v3.5：每实例独立定时全量/增量 cron）</summary>
+    public List<DbBackupInstance> DbBackupInstances { get; set; } = new();
 
     /// <summary>是否允许后台调度</summary>
     public bool BackgroundSchedulingEnabled { get; set; } = true;

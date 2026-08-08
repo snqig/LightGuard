@@ -45,9 +45,10 @@ public sealed class ModuleManager : IDisposable
         // 第二层附加：Defender 查杀调度（MpCmdRun 按需扫描 + 病毒库更新）
         Register(new Modules.DefenderScanModule(appState));
 
-        // 第三层：加密容灾（五层粒度备份 + 灾难恢复 + 数据库备份）
+        // 第三层：加密容灾（五层粒度备份 + 灾难恢复 + 数据库备份 + 定时/实时调度）
         Register(new Modules.EncryptedBackupModule(appState));
         Register(new Modules.DatabaseBackupModule(appState));
+        Register(new Modules.ScheduledBackupModule(appState));
         Register(new Modules.DisasterRecoveryModule(appState));
 
         // 第四层：审计与更新

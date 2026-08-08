@@ -14,6 +14,7 @@ using LightGuard.Audit;
 using LightGuard.Backup;
 using LightGuard.Core;
 using LightGuard.Core.CloudUpdate;
+using LightGuard.Database;
 using LightGuard.Recovery;
 using LightGuard.Update;
 
@@ -172,6 +173,7 @@ internal sealed class SelectiveRecoveryTests
         RunDefenderIntegration();
         RunVhdMount();
         RunWormIntegration();
+        RunV35ScheduledBackup();
     }
 
     private void RunFunctional()
@@ -1677,6 +1679,251 @@ internal sealed class SelectiveRecoveryTests
                 else if (Directory.Exists(p)) Directory.Delete(p, true);
             }
             catch { }
+        }
+    }
+
+    // ==================== v3.5 定时/增量备份调度测试 ====================
+
+    /// <summary>
+    /// v3.5 备份模块迭代测试：
+    ///   1. CronExpression 解析与命中
+    ///   2. 快捷周期预设
+    ///   3. BackupReentryLock 防重入
+    ///   4. FileBackupJob / DbBackupInstance 配置序列化往返
+    ///   5. KeyDerivation HKDF 派生与盐
+    ///   6. LicenseGuard 授权门禁
+    ///   7. DbIncrementalBackupEngine 增量支持判定（SQLite 禁用）
+    /// </summary>
+    private void RunV35ScheduledBackup()
+    {
+        Section("v3.5 定时/增量备份调度");
+
+        // ---- 1. CronExpression 解析与命中 ----
+        try
+        {
+            var cron = CronExpression.Parse("0 2 * * *"); // 每天 02:00
+            Assert(cron.IsMatch(new DateTime(2026, 8, 8, 2, 0, 0)), "Cron 每天02:00 命中");
+            Assert(!cron.IsMatch(new DateTime(2026, 8, 8, 3, 0, 0)), "Cron 每天02:00 不命中03:00");
+
+            var every2h = CronExpression.Parse("0 */2 * * *");
+            Assert(every2h.IsMatch(new DateTime(2026, 8, 8, 14, 0, 0)), "Cron */2小时 命中14:00");
+            Assert(!every2h.IsMatch(new DateTime(2026, 8, 8, 15, 0, 0)), "Cron */2小时 不命中15:00");
+
+            var weekly = CronExpression.Parse("0 2 * * 0"); // 每周日
+            Assert(weekly.IsMatch(new DateTime(2026, 8, 9, 2, 0, 0)), "Cron 周日02:00 命中(2026-08-09是周日)");
+            Assert(!weekly.IsMatch(new DateTime(2026, 8, 10, 2, 0, 0)), "Cron 周日02:00 不命中周一");
+
+            var listCron = CronExpression.Parse("0 1,13 * * *"); // 01:00 与 13:00
+            Assert(listCron.IsMatch(new DateTime(2026, 8, 8, 13, 0, 0)), "Cron 列表1,13 命中13:00");
+            Assert(!listCron.IsMatch(new DateTime(2026, 8, 8, 14, 0, 0)), "Cron 列表1,13 不命中14:00");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"Cron 解析异常：{ex.Message}");
+        }
+
+        // IsDue：同分钟不重复触发（分钟级去重，支持一天多次）
+        try
+        {
+            var cron = CronExpression.Parse("0 2 * * *");
+            var t = new DateTime(2026, 8, 8, 2, 0, 0);
+            Assert(cron.IsDue(t, null), "IsDue 首次触发");
+            Assert(!cron.IsDue(t, t), "IsDue 同分钟不重复触发");
+            Assert(cron.IsDue(t, t.AddDays(-1)), "IsDue 上次运行为前一天则触发");
+            Assert(!cron.IsDue(t.AddMinutes(1), t), "IsDue 非命中分钟不触发（分钟字段不匹配）");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"IsDue 异常：{ex.Message}");
+        }
+
+        // ---- 2. 快捷周期预设 ----
+        Assert(CronExpression.FromPreset(CronPreset.Daily) == "0 2 * * *", "预设 Daily -> 0 2 * * *");
+        Assert(CronExpression.FromPreset(CronPreset.Weekly) == "0 2 * * 0", "预设 Weekly -> 0 2 * * 0");
+        Assert(CronExpression.FromPreset(CronPreset.Every6Hours) == "0 */6 * * *", "预设 Every6Hours -> 0 */6 * * *");
+        Assert(CronExpression.ToPreset("0 2 * * *") == CronPreset.Daily, "cron 反查预设 Daily");
+        Assert(string.IsNullOrEmpty(CronExpression.FromPreset(CronPreset.Disabled)), "预设 Disabled -> 空");
+
+        // ---- 3. BackupReentryLock 防重入 ----
+        try
+        {
+            var reentry = new BackupReentryLock();
+            Assert(reentry.TryEnter("file:test"), "防重入 首次进入成功");
+            Assert(!reentry.TryEnter("file:test"), "防重入 运行中再次进入失败");
+            Assert(reentry.IsRunning("file:test"), "防重入 IsRunning=true");
+            reentry.Exit("file:test");
+            Assert(!reentry.IsRunning("file:test"), "防重入 Exit 后 IsRunning=false");
+            Assert(reentry.TryEnter("file:test"), "防重入 Exit 后可再次进入");
+            reentry.Exit("file:test");
+
+            // 不同任务互不影响
+            Assert(reentry.TryEnter("file:a") && reentry.TryEnter("file:b"), "防重入 不同任务可并行");
+            reentry.Exit("file:a");
+            reentry.Exit("file:b");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"防重入异常：{ex.Message}");
+        }
+
+        // ---- 4. 配置序列化往返 ----
+        try
+        {
+            var job = new FileBackupJob
+            {
+                Name = "工作目录",
+                SourcePath = @"D:\Work",
+                IsSingleFile = false,
+                FullCron = "0 2 * * 0",
+                IncrementalCron = "0 */2 * * *",
+                RealtimeWatch = true,
+                WatchDebounceMs = 3000,
+                Retention = new SnapshotRetention { Hourly = 24, Daily = 7, Weekly = 4 },
+                PasswordRef = "job_work"
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(job);
+            var back = System.Text.Json.JsonSerializer.Deserialize<FileBackupJob>(json);
+            Assert(back != null && back.Name == "工作目录" && back.FullCron == "0 2 * * 0"
+                   && back.RealtimeWatch && back.WatchDebounceMs == 3000
+                   && back.Retention.Daily == 7, "FileBackupJob 序列化往返");
+
+            var inst = new DbBackupInstance
+            {
+                Name = "生产MySQL",
+                DbType = DatabaseType.PostgreSQL,
+                Host = "192.168.1.10",
+                Port = 5432,
+                User = "backup",
+                Database = "appdb",
+                FullCron = "0 1 * * *",
+                IncrementalCron = "0 */6 * * *",
+                SaltBase64 = KeyDerivation.SaltToBase64(KeyDerivation.NewSalt()),
+                CredentialRef = "db_prod"
+            };
+            var json2 = System.Text.Json.JsonSerializer.Serialize(inst);
+            var back2 = System.Text.Json.JsonSerializer.Deserialize<DbBackupInstance>(json2);
+            Assert(back2 != null && back2.DbType == DatabaseType.PostgreSQL && back2.Port == 5432
+                   && back2.Host == "192.168.1.10" && back2.FullCron == "0 1 * * *", "DbBackupInstance 序列化往返");
+
+            // AppConfig 新增节
+            var config = new AppConfig();
+            config.FileBackupJobs.Add(job);
+            config.DbBackupInstances.Add(inst);
+            var cfgJson = System.Text.Json.JsonSerializer.Serialize(config);
+            var cfgBack = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(cfgJson);
+            Assert(cfgBack != null && cfgBack.FileBackupJobs.Count == 1 && cfgBack.DbBackupInstances.Count == 1
+                   && cfgBack.FileBackupJobs[0].Name == "工作目录", "AppConfig v3.5 新增节序列化往返");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"配置序列化异常：{ex.Message}");
+        }
+
+        // ---- 5. KeyDerivation HKDF ----
+        try
+        {
+            var salt = KeyDerivation.NewSalt();
+            Assert(salt.Length == 16, "KeyDerivation 盐长度 16");
+            var k1 = KeyDerivation.DeriveKey("secret", salt, "cred1");
+            var k2 = KeyDerivation.DeriveKey("secret", salt, "cred1");
+            var k3 = KeyDerivation.DeriveKey("secret", salt, "cred2");
+            var k4 = KeyDerivation.DeriveKey("other", salt, "cred1");
+            Assert(k1.Length == 32, "HKDF 派生密钥长度 32");
+            Assert(Convert.ToHexString(k1) == Convert.ToHexString(k2), "HKDF 同密码同盐同info 一致");
+            Assert(Convert.ToHexString(k1) != Convert.ToHexString(k3), "HKDF 不同info 不同");
+            Assert(Convert.ToHexString(k1) != Convert.ToHexString(k4), "HKDF 不同密码 不同");
+
+            // 盐 Base64 往返
+            var b64 = KeyDerivation.SaltToBase64(salt);
+            var saltBack = KeyDerivation.SaltFromBase64(b64);
+            Assert(Convert.ToHexString(salt) == Convert.ToHexString(saltBack), "盐 Base64 往返一致");
+
+            KeyDerivation.ZeroMemory(k1);
+            KeyDerivation.ZeroMemory(k2);
+            KeyDerivation.ZeroMemory(k3);
+            KeyDerivation.ZeroMemory(k4);
+            Assert(true, "ZeroMemory 调用无异常");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"KeyDerivation 异常：{ex.Message}");
+        }
+
+        // ---- 6. LicenseGuard 授权门禁 ----
+        try
+        {
+            LicenseGuard.SetConfigProvider(() => new LicenseConfig { Activated = false });
+            Assert(!LicenseGuard.IsBackupEnabled(), "未授权 备份禁用");
+            Assert(!LicenseGuard.IsActivated, "未授权 IsActivated=false");
+
+            LicenseGuard.SetConfigProvider(() => new LicenseConfig { Activated = true });
+            Assert(LicenseGuard.IsBackupEnabled(), "已授权 备份启用");
+
+            LicenseGuard.SetConfigProvider(() => new LicenseConfig { Activated = true, ExpiresAt = DateTime.Now.AddDays(-1) });
+            Assert(!LicenseGuard.IsBackupEnabled(), "授权已过期 备份禁用");
+
+            var hash = LicenseGuard.HashKey("LG-ACTIVE-KEY");
+            Assert(LicenseGuard.ValidateKey("LG-ACTIVE-KEY", hash), "激活码校验通过");
+            Assert(!LicenseGuard.ValidateKey("WRONG", hash), "错误激活码校验失败");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"LicenseGuard 异常：{ex.Message}");
+        }
+
+        // ---- 7. 增量支持判定（SQLite 强制禁用）----
+        try
+        {
+            Assert(!DbIncrementalBackupEngine.IsIncrementalSupported(DatabaseType.SQLite), "SQLite 强制禁用增量");
+            Assert(DbIncrementalBackupEngine.IsIncrementalSupported(DatabaseType.MySQL), "MySQL 支持增量");
+            Assert(DbIncrementalBackupEngine.IsIncrementalSupported(DatabaseType.MariaDB), "MariaDB 支持增量");
+            Assert(DbIncrementalBackupEngine.IsIncrementalSupported(DatabaseType.PostgreSQL), "PostgreSQL 支持增量");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"增量支持判定异常：{ex.Message}");
+        }
+
+        // ---- 8. BackupCredentialStore 凭据注册（不落盘明文）----
+        try
+        {
+            var salt = KeyDerivation.NewSalt();
+            BackupCredentialStore.Register("db_test", "P@ssw0rd!", KeyDerivation.SaltToBase64(salt));
+            Assert(BackupCredentialStore.Has("db_test"), "凭据已注册");
+            var derived = BackupCredentialStore.Get("db_test");
+            Assert(derived != null && derived.Length == 64, "凭据派生口令为 64 位 hex（AES-256）");
+            Assert(BackupCredentialStore.Get("db_test") == derived, "凭据幂等读取");
+            BackupCredentialStore.Clear("db_test");
+            Assert(!BackupCredentialStore.Has("db_test"), "凭据已清除");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"凭据存储异常：{ex.Message}");
+        }
+
+        // ---- 9. DbConnectionTester SQLite 文件有效性 ----
+        try
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), $"lg_sqlite_test_{Guid.NewGuid():N}.db");
+            // 构造合法 SQLite 文件头
+            File.WriteAllText(tmp, "SQLite format 3\0" + new string('x', 100));
+            var ok = DbConnectionTester.Test(DatabaseType.SQLite, "", 0, "", "", "", tmp);
+            Assert(ok.Success, "SQLite 合法文件头 测试通过");
+
+            var bad = Path.Combine(Path.GetTempPath(), $"lg_bad_{Guid.NewGuid():N}.txt");
+            File.WriteAllText(bad, "not a database");
+            var fail = DbConnectionTester.Test(DatabaseType.SQLite, "", 0, "", "", "", bad);
+            Assert(!fail.Success, "SQLite 非法文件 测试失败");
+
+            var missing = Path.Combine(Path.GetTempPath(), $"lg_missing_{Guid.NewGuid():N}.db");
+            var miss = DbConnectionTester.Test(DatabaseType.SQLite, "", 0, "", "", "", missing);
+            Assert(!miss.Success, "SQLite 文件不存在 测试失败");
+
+            TryCleanup(tmp, bad);
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"DbConnectionTester 异常：{ex.Message}");
         }
     }
 

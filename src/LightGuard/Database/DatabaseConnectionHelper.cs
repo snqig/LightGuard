@@ -50,6 +50,9 @@ public static class DatabaseConnectionHelper
             DatabaseType.Access =>
                 BuildAccessConnectionString(database, password),
 
+            DatabaseType.PostgreSQL =>
+                $"Host={server};Port={port};Database={database};Username={user};Password={password};",
+
             _ => throw new ArgumentException($"不支持的数据库类型：{dbType}", nameof(dbType))
         };
     }
@@ -97,8 +100,23 @@ public static class DatabaseConnectionHelper
             DatabaseType.SqlServer => TestSqlServerConnection(connStr),
             DatabaseType.SQLite => TestSqliteConnection(connStr),
             DatabaseType.Access => TestAccessConnection(connStr),
+            DatabaseType.PostgreSQL => TestPostgreSqlConnection(connStr),
             _ => (false, $"不支持的数据库类型：{dbType}")
         };
+    }
+
+    /// <summary>PostgreSQL 命令行连接测试（PGPASSWORD 环境变量传密码，不暴露命令行）。</summary>
+    private static (bool success, string message) TestPostgreSqlConnection(string connStr)
+    {
+        var server = ExtractValue(connStr, "Host", ExtractValue(connStr, "Server", "localhost"));
+        var port = ExtractValue(connStr, "Port", "5432");
+        var db = ExtractValue(connStr, "Database", "postgres");
+        var user = ExtractValue(connStr, "Username", ExtractValue(connStr, "User Id", "postgres"));
+        var pwd = ExtractValue(connStr, "Password", "");
+
+        var args = $"--host={server} --port={port} --username={user} --dbname={db} --tuples-only --no-align --command=\"SELECT 1\"";
+        var (code, _, error) = RunProcessWithEnv("psql", args, ("PGPASSWORD", pwd));
+        return code == 0 ? (true, "连接成功") : (false, $"连接失败：{error}");
     }
 
     /// <summary>使用 ADO.NET 提供程序测试连接</summary>
@@ -464,6 +482,40 @@ public static class DatabaseConnectionHelper
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
+
+            using var proc = Process.Start(psi);
+            if (proc == null) return (-1, string.Empty, "无法启动进程");
+
+            var output = proc.StandardOutput.ReadToEnd();
+            var error = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            return (proc.ExitCode, output, error);
+        }
+        catch (Exception ex)
+        {
+            return (-1, string.Empty, ex.Message);
+        }
+    }
+
+    /// <summary>运行外部进程并捕获结果（附加环境变量，如 PGPASSWORD 传递密码）</summary>
+    private static (int ExitCode, string Output, string Error) RunProcessWithEnv(
+        string fileName, string args, (string Key, string Value) envVar)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = args,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            psi.Environment[envVar.Key] = envVar.Value;
 
             using var proc = Process.Start(psi);
             if (proc == null) return (-1, string.Empty, "无法启动进程");

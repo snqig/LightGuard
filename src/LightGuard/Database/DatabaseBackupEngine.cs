@@ -26,7 +26,10 @@ public enum DatabaseType
     SqlServer,
 
     /// <summary>Microsoft Access 数据库</summary>
-    Access
+    Access,
+
+    /// <summary>PostgreSQL 数据库（v3.5 新增）</summary>
+    PostgreSQL
 }
 
 /// <summary>
@@ -193,6 +196,7 @@ public sealed class DatabaseBackupEngine
                 DatabaseType.MariaDB => ".mariadb",
                 DatabaseType.SqlServer => ".sqlserver",
                 DatabaseType.Access => ".access",
+                DatabaseType.PostgreSQL => ".postgres",
                 _ => ".db"
             };
             var backupName = $"dbbackup_{dbType}_{timestamp:yyyyMMdd_HHmmss}{ext}.enc";
@@ -216,6 +220,9 @@ public sealed class DatabaseBackupEngine
                     break;
                 case DatabaseType.Access:
                     rawData = BackupAccess(connStr);
+                    break;
+                case DatabaseType.PostgreSQL:
+                    rawData = BackupPostgreSql(connStr);
                     break;
                 default:
                     result.Success = false;
@@ -353,6 +360,9 @@ public sealed class DatabaseBackupEngine
                     break;
                 case DatabaseType.Access:
                     success = RestoreAccess(connStr, rawData);
+                    break;
+                case DatabaseType.PostgreSQL:
+                    success = RestorePostgreSql(connStr, rawData);
                     break;
                 default:
                     ErrorReporter.Log($"还原失败：不支持的数据库类型 {header.DbType}", "ERROR");
@@ -837,6 +847,176 @@ public sealed class DatabaseBackupEngine
 
         File.WriteAllBytes(dbPath, data);
         return true;
+    }
+
+    #endregion
+
+    #region PostgreSQL 备份/还原（v3.5 新增）
+
+    /// <summary>
+    /// PostgreSQL 全量备份：调用 pg_dump 逻辑备份（流式读取 stdout，不落地明文文件）。
+    /// <para>PGPASSWORD 环境变量传递密码，避免命令行暴露明文。</para>
+    /// </summary>
+    private byte[] BackupPostgreSql(string connStr)
+    {
+        var p = ParsePostgreSqlConnection(connStr);
+        if (string.IsNullOrEmpty(p.Database))
+            throw new InvalidOperationException("PostgreSQL 连接字符串中缺少 Database");
+
+        var args = new StringBuilder();
+        args.Append($"--host={p.Host}");
+        args.Append($" --port={p.Port}");
+        args.Append($" --username={p.User}");
+        args.Append(" --format=plain");
+        args.Append(" --no-owner");
+        args.Append(" --no-privileges");
+        args.Append(" --quote-all-identifiers");
+        args.Append($" {p.Database}");
+
+        ReportProgress(10, string.Empty, 0, $"正在导出 PostgreSQL 数据库 {p.Database}...");
+        var output = RunProcessCaptureWithEnv("pg_dump", args.ToString(), new Dictionary<string, string>
+        {
+            ["PGPASSWORD"] = p.Password
+        });
+
+        if (output.ExitCode != 0)
+            throw new InvalidOperationException($"pg_dump 失败（退出码 {output.ExitCode}）：{output.Error}");
+
+        ReportProgress(50, string.Empty, 0, "PostgreSQL 导出完成");
+        return Encoding.UTF8.GetBytes(output.Output);
+    }
+
+    /// <summary>
+    /// PostgreSQL 还原：将 SQL 脚本通过 psql 导入（PGPASSWORD 环境变量传递密码）。
+    /// </summary>
+    private bool RestorePostgreSql(string connStr, byte[] data)
+    {
+        var p = ParsePostgreSqlConnection(connStr);
+        var args = new StringBuilder();
+        args.Append($"--host={p.Host}");
+        args.Append($" --port={p.Port}");
+        args.Append($" --username={p.User}");
+        if (!string.IsNullOrEmpty(p.Database))
+            args.Append($" --dbname={p.Database}");
+
+        var sqlScript = Encoding.UTF8.GetString(data);
+        var result = RunProcessWithStdinEnv("psql", args.ToString(), sqlScript, new Dictionary<string, string>
+        {
+            ["PGPASSWORD"] = p.Password
+        });
+
+        if (result.ExitCode != 0)
+        {
+            ErrorReporter.Log($"PostgreSQL 还原失败（退出码 {result.ExitCode}）：{result.Error}", "ERROR");
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>PostgreSQL 连接参数</summary>
+    private sealed class PostgreSqlConnInfo
+    {
+        public string Host { get; set; } = "localhost";
+        public int Port { get; set; } = 5432;
+        public string Database { get; set; } = "";
+        public string User { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+
+    /// <summary>解析 PostgreSQL 连接字符串</summary>
+    private static PostgreSqlConnInfo ParsePostgreSqlConnection(string connStr)
+    {
+        var info = new PostgreSqlConnInfo();
+        info.Host = ExtractConnectionStringValue(connStr, "Server");
+        if (string.IsNullOrEmpty(info.Host)) info.Host = ExtractConnectionStringValue(connStr, "Host");
+        if (string.IsNullOrEmpty(info.Host)) info.Host = ExtractConnectionStringValue(connStr, "Hostname");
+
+        var portStr = ExtractConnectionStringValue(connStr, "Port");
+        if (int.TryParse(portStr, out var port)) info.Port = port;
+
+        info.Database = ExtractConnectionStringValue(connStr, "Database");
+        if (string.IsNullOrEmpty(info.Database)) info.Database = ExtractConnectionStringValue(connStr, "db");
+
+        info.User = ExtractConnectionStringValue(connStr, "Username");
+        if (string.IsNullOrEmpty(info.User)) info.User = ExtractConnectionStringValue(connStr, "User Id");
+        if (string.IsNullOrEmpty(info.User)) info.User = ExtractConnectionStringValue(connStr, "User");
+        if (string.IsNullOrEmpty(info.User)) info.User = ExtractConnectionStringValue(connStr, "Uid");
+
+        info.Password = ExtractConnectionStringValue(connStr, "Password");
+        if (string.IsNullOrEmpty(info.Password)) info.Password = ExtractConnectionStringValue(connStr, "Pwd");
+        return info;
+    }
+
+    /// <summary>带环境变量的进程执行（PGPASSWORD 传递密码，避免命令行暴露）。</summary>
+    private (int ExitCode, string Output, string Error) RunProcessCaptureWithEnv(
+        string fileName, string args, Dictionary<string, string> env)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = args,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            foreach (var (k, v) in env)
+                psi.Environment[k] = v;
+
+            using var proc = Process.Start(psi);
+            if (proc == null) return (-1, string.Empty, "无法启动进程");
+
+            var output = proc.StandardOutput.ReadToEnd();
+            var error = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+            return (proc.ExitCode, output, error);
+        }
+        catch (Exception ex)
+        {
+            return (-1, string.Empty, ex.Message);
+        }
+    }
+
+    /// <summary>带环境变量 + stdin 的进程执行。</summary>
+    private (int ExitCode, string Output, string Error) RunProcessWithStdinEnv(
+        string fileName, string args, string stdin, Dictionary<string, string> env)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = args,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            foreach (var (k, v) in env)
+                psi.Environment[k] = v;
+
+            using var proc = Process.Start(psi);
+            if (proc == null) return (-1, string.Empty, "无法启动进程");
+
+            proc.StandardInput.Write(stdin);
+            proc.StandardInput.Close();
+
+            var output = proc.StandardOutput.ReadToEnd();
+            var error = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+            return (proc.ExitCode, output, error);
+        }
+        catch (Exception ex)
+        {
+            return (-1, string.Empty, ex.Message);
+        }
     }
 
     #endregion

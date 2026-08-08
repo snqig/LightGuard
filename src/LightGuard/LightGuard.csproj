@@ -12,13 +12,13 @@
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>3.4.0</Version>
-    <AssemblyVersion>3.4.0.0</AssemblyVersion>
-    <FileVersion>3.4.0.0</FileVersion>
+    <Version>3.5.0</Version>
+    <AssemblyVersion>3.5.0.0</AssemblyVersion>
+    <FileVersion>3.5.0.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
     <Copyright>© 2026 落尘（Luochen）保留所有权利</Copyright>
-    <Description>LightGuard V3.4 全栈安全容灾审计系统 - Defender 全业务集成 + P1 全批次能力</Description>
+    <Description>LightGuard V3.5 全栈安全容灾审计系统 - 备份模块迭代（定时/实时增量 + 数据库 cron + dbconfig）</Description>
     <NeutralLanguage>zh-CN</NeutralLanguage>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>
