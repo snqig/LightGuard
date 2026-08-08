@@ -12,10 +12,12 @@ using System.Security.Cryptography;
 using System.Text;
 using LightGuard.Audit;
 using LightGuard.Backup;
+using LightGuard.ClientServer;
 using LightGuard.Core;
 using LightGuard.Core.CloudUpdate;
 using LightGuard.Database;
 using LightGuard.Recovery;
+using LightGuard.Shared;
 using LightGuard.Update;
 
 namespace SelectiveRecoveryTest;
@@ -174,6 +176,7 @@ internal sealed class SelectiveRecoveryTests
         RunVhdMount();
         RunWormIntegration();
         RunV35ScheduledBackup();
+        RunV36ClientServer();
     }
 
     private void RunFunctional()
@@ -1924,6 +1927,136 @@ internal sealed class SelectiveRecoveryTests
         catch (Exception ex)
         {
             Assert(false, $"DbConnectionTester 异常：{ex.Message}");
+        }
+    }
+
+    // ==================== v3.6 C/S 端到端测试 ====================
+
+    /// <summary>
+    /// v3.6 Client-Server 备份端到端测试：
+    ///   1. 服务端启动 + 密码认证
+    ///   2. 客户端本地分块+SHA256+加密 → 仅上传缺失块
+    ///   3. 二次备份复用块（不重复传输）
+    ///   4. 快照创建 / 列表 / 读取
+    ///   5. 快照恢复（服务端下发块，客户端解密）
+    ///   6. 数据库备份流分片上传
+    ///   7. 快照删除 / 回收清理
+    ///   8. 断线重连 / 错误密码拒绝
+    /// </summary>
+    private void RunV36ClientServer()
+    {
+        Section("v3.6 Client-Server 备份");
+
+        var dataDir = Path.Combine(Path.GetTempPath(), $"lg_cs_server_{Guid.NewGuid():N}");
+        var srcDir = Path.Combine(Path.GetTempPath(), $"lg_cs_src_{Guid.NewGuid():N}");
+        var restoreDir = Path.Combine(Path.GetTempPath(), $"lg_cs_restore_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dataDir);
+        Directory.CreateDirectory(srcDir);
+
+        try
+        {
+            // ---- 0. 构造测试源 ----
+            Directory.CreateDirectory(Path.Combine(srcDir, "sub"));
+            File.WriteAllText(Path.Combine(srcDir, "a.txt"), "hello cs backup - alpha");
+            File.WriteAllBytes(Path.Combine(srcDir, "b.bin"), RandomNumberGenerator.GetBytes(700_000)); // 跨多块
+            File.WriteAllText(Path.Combine(srcDir, "sub", "c.txt"), "nested file content");
+
+            // ---- 1. 服务端启动 ----
+            var serverConfig = new LightGuardServer.ServerConfig
+            {
+                Port = 19021 + RandomNumberGenerator.GetInt32(1000),
+                BindAddress = "127.0.0.1",
+                PasswordHash = LightGuard.Shared.CsTransport.HashPassword("TestCsP@ss"),
+                DataDir = dataDir,
+                MaxSnapshotsPerClient = 5
+            };
+            serverConfig.EnsureDirectories();
+
+            using var blocks = new LightGuardServer.BlockStore(serverConfig);
+            using var snapshots = new LightGuardServer.SnapshotStore(serverConfig, blocks);
+            using var server = new LightGuardServer.CsBackupServer(serverConfig, blocks, snapshots);
+            _ = server.StartAsync();
+            Thread.Sleep(500); // 等待监听就绪
+
+            Assert(true, "C/S 服务端已启动（密码认证启用）");
+
+            // ---- 2. 客户端连接 + 备份 ----
+            var csConfig = new ClientServerConfig
+            {
+                WorkMode = BackupWorkMode.ClientServer,
+                ServerHost = "127.0.0.1",
+                ServerPort = serverConfig.Port,
+                AuthPassword = "TestCsP@ss",
+                ClientId = "test-client-1",
+                MaxSnapshotsPerClient = 5
+            };
+
+            using var service = new CsBackupService(csConfig, "backup-password");
+            var backup = service.BackupAsync(srcDir, "File_E2E_1").GetAwaiter().GetResult();
+            Assert(backup.Success, $"C/S 文件备份成功（{backup.Message}）");
+            Assert(backup.FileCount == 3, $"C/S 备份 3 个文件（实际 {backup.FileCount}）");
+            Assert(backup.NewBlocks > 0, $"C/S 备份上传了新块（{backup.NewBlocks}）");
+            Assert(!string.IsNullOrEmpty(backup.SnapshotId), "C/S 备份返回快照 ID");
+
+            var snapshotId1 = backup.SnapshotId;
+
+            // ---- 3. 二次备份：复用块（只传变更块） ----
+            File.WriteAllText(Path.Combine(srcDir, "a.txt"), "hello cs backup - alpha EDITED");
+            var backup2 = service.BackupAsync(srcDir, "File_E2E_2").GetAwaiter().GetResult();
+            Assert(backup2.Success, $"C/S 二次备份成功（{backup2.Message}）");
+            Assert(backup2.ReusedBlocks > 0, $"C/S 二次备份复用了块（{backup2.ReusedBlocks} 复用，新增 {backup2.NewBlocks}）");
+            Assert(backup2.NewBlocks < backup.NewBlocks, $"C/S 二次备份只传变更块（新增 {backup2.NewBlocks} < 首次 {backup.NewBlocks}）");
+
+            // ---- 4. 快照列表 ----
+            var snapshotsList = service.ListSnapshotsAsync().GetAwaiter().GetResult();
+            Assert(snapshotsList.Count >= 2, $"C/S 快照列表 >= 2（实际 {snapshotsList.Count}）");
+
+            // ---- 5. 快照恢复 ----
+            var restore = service.RestoreAsync(snapshotId1, restoreDir).GetAwaiter().GetResult();
+            Assert(restore.Success, $"C/S 快照恢复成功（{restore.Message}）");
+            var restoredA = Path.Combine(restoreDir, "a.txt");
+            Assert(File.Exists(restoredA) && File.ReadAllText(restoredA) == "hello cs backup - alpha",
+                "C/S 恢复 a.txt 内容正确（快照1 = 未编辑版本）");
+            Assert(File.Exists(Path.Combine(restoreDir, "sub", "c.txt")), "C/S 恢复子目录文件存在");
+
+            // ---- 6. 数据库备份流 ----
+            var dbStream = new MemoryStream(Encoding.UTF8.GetBytes("CREATE TABLE t(id int); INSERT ..."));
+            var dbResult = service.BackupDatabaseStreamAsync("SQLite", "test.db", dbStream, "Db_E2E").GetAwaiter().GetResult();
+            Assert(dbResult.Success, $"C/S 数据库备份流成功（{dbResult.Message}）");
+            Assert(dbResult.NewBlocks >= 1, "C/S 数据库流分片上传了块");
+
+            // ---- 7. 快照删除 ----
+            var del = service.Client.DeleteSnapshotAsync(snapshotId1).GetAwaiter().GetResult();
+            Assert(del.Ok, "C/S 快照删除成功");
+
+            // ---- 8. 断线重连：断开后再操作自动重连 ----
+            service.Disconnect();
+            var afterReconnect = service.ListSnapshotsAsync().GetAwaiter().GetResult();
+            Assert(afterReconnect.Count >= 1, $"C/S 断线重连后仍可操作（快照数 {afterReconnect.Count}）");
+
+            // ---- 9. 错误密码拒绝 ----
+            var badConfig = new ClientServerConfig
+            {
+                WorkMode = BackupWorkMode.ClientServer,
+                ServerHost = "127.0.0.1",
+                ServerPort = serverConfig.Port,
+                AuthPassword = "WrongPassword"
+            };
+            using var badService = new CsBackupService(badConfig, "x");
+            var badConnect = badService.ConnectAsync().GetAwaiter().GetResult();
+            Assert(!badConnect.Success, "C/S 错误密码被拒绝");
+
+            // ---- 10. 回收清理 ----
+            var cleanup = service.CleanupAsync(5).GetAwaiter().GetResult();
+            Assert(cleanup.Ok, "C/S 快照回收清理执行");
+        }
+        catch (Exception ex)
+        {
+            Assert(false, $"C/S 端到端测试异常：{ex}");
+        }
+        finally
+        {
+            TryCleanup(dataDir, srcDir, restoreDir);
         }
     }
 

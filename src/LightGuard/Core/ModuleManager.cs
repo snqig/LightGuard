@@ -48,6 +48,7 @@ public sealed class ModuleManager : IDisposable
         // 第三层：加密容灾（五层粒度备份 + 灾难恢复 + 数据库备份 + 定时/实时调度）
         Register(new Modules.EncryptedBackupModule(appState));
         Register(new Modules.DatabaseBackupModule(appState));
+        Register(new Modules.CsBackupModule(appState));
         Register(new Modules.ScheduledBackupModule(appState));
         Register(new Modules.DisasterRecoveryModule(appState));
 

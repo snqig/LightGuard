@@ -16,6 +16,8 @@
   <ItemGroup>
     <!-- 引用真实 LightGuard 代码，验证选择性还原实际逻辑 -->
     <ProjectReference Include="..\..\src\LightGuard\LightGuard.csproj" />
+    <!-- 引用 C/S 服务端代码，验证端到端 Client-Server 备份 -->
+    <ProjectReference Include="..\..\src\LightGuardServer\LightGuardServer.csproj" />
   </ItemGroup>
 
 </Project>

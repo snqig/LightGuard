@@ -12,13 +12,13 @@
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <AssemblyName>LightGuard</AssemblyName>
     <RootNamespace>LightGuard</RootNamespace>
-    <Version>3.5.0</Version>
-    <AssemblyVersion>3.5.0.0</AssemblyVersion>
-    <FileVersion>3.5.0.0</FileVersion>
+    <Version>3.6.0</Version>
+    <AssemblyVersion>3.6.0.0</AssemblyVersion>
+    <FileVersion>3.6.0.0</FileVersion>
     <Company>LightGuard</Company>
     <Product>LightGuard</Product>
     <Copyright>© 2026 落尘（Luochen）保留所有权利</Copyright>
-    <Description>LightGuard V3.5 全栈安全容灾审计系统 - 备份模块迭代（定时/实时增量 + 数据库 cron + dbconfig）</Description>
+    <Description>LightGuard V3.6 五合一全栈安全容灾审计系统 - Client-Server 自定义 TCP 备份（块级真增量/快照恢复/密码认证）</Description>
     <NeutralLanguage>zh-CN</NeutralLanguage>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>assets\lightguard.ico</ApplicationIcon>
@@ -52,6 +52,11 @@
     <Content Include="Resources\lang\lang_zh-TW.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- C/S 自定义备份协议共享库（LightGuardServer 与客户端共用报文编解码） -->
+    <ProjectReference Include="..\LightGuard.Shared\LightGuard.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>

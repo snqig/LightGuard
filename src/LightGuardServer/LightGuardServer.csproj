@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>LightGuardServer</AssemblyName>
+    <RootNamespace>LightGuardServer</RootNamespace>
+    <Version>3.6.0</Version>
+    <AssemblyVersion>3.6.0.0</AssemblyVersion>
+    <FileVersion>3.6.0.0</FileVersion>
+    <Company>LightGuard</Company>
+    <Product>LightGuardServer</Product>
+    <Copyright>© 2026 落尘（Luochen）保留所有权利</Copyright>
+    <Description>LightGuardServer - C/S 备份服务端（TCP 监听、密码认证、块存储、快照管理）</Description>
+    <!-- 引用的 LightGuard.Shared 是纯库；为兼容 self-contained 测试宿主，服务端同步自包含 -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LightGuard.Shared\LightGuard.Shared.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using LightGuard.Backup;
+using LightGuard.ClientServer;
 using LightGuard.Core.Interfaces;
 using LightGuard.Database;
 using LightGuard.NetworkIsolation;
@@ -59,6 +60,9 @@ public sealed class AppConfig
 
     /// <summary>数据库备份实例列表（v3.5：每实例独立定时全量/增量 cron）</summary>
     public List<DbBackupInstance> DbBackupInstances { get; set; } = new();
+
+    /// <summary>客户端 C/S 备份配置（v3.6：local / client_server 模式切换）</summary>
+    public ClientServerConfig ClientServer { get; set; } = new();
 
     /// <summary>是否允许后台调度</summary>
     public bool BackgroundSchedulingEnabled { get; set; } = true;

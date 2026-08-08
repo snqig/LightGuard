@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>LightGuard.Shared</AssemblyName>
+    <RootNamespace>LightGuard.Shared</RootNamespace>
+    <!-- 纯协议库：无 UI 依赖，客户端与服务端共用 -->
+  </PropertyGroup>
+</Project>
